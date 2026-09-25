@@ -1,0 +1,57 @@
+[package]
+name = "chickpea-rs"
+version = "0.4.0"
+edition = "2021"
+rust-version = "1.91"
+license = "MIT"
+authors = ["Yongjin Park <ypp@stat.ubc.ca> <yongjin.park@ubc.ca>"]
+description = "Chromatin Interactions Captured by Knitting Peaks with Expression Anchors — peak-to-gene linkage"
+repository = "https://github.com/causalpathlab/chickpea-rs"
+homepage = "https://github.com/causalpathlab/chickpea-rs"
+readme = "README.md"
+keywords = ["genomics", "single-cell", "multiome", "peak-to-gene", "atac"]
+categories = ["science", "command-line-utilities"]
+exclude = [
+    "**/.claude/**",
+    "**/.DS_Store",
+    "temp*/**",
+]
+
+[lib]
+name = "chickpea"
+path = "src/lib.rs"
+
+[[bin]]
+name = "chickpea"
+path = "src/main.rs"
+
+[features]
+default = []
+cuda = [
+    "legume-numeric/cuda",
+    "data-beans/cuda",
+    "graph-embedding-util/cuda",
+]
+metal = [
+    "legume-numeric/metal",
+    "data-beans/metal",
+    "graph-embedding-util/metal",
+]
+hdf5 = ["data-beans/hdf5"]
+
+[dependencies]
+data-beans = { version = "0.6.12", features = ["aux", "alg"] }
+legume-numeric = { version = "0.8.10", features = ["matrix", "param", "candle", "mcmc"] }
+genomic-data = { version = "0.4.1", package = "legume-genomic-types" }
+graph-embedding-util = { version = "0.8.4", package = "legume-graph-embedding" }
+
+anyhow = "1.0"
+clap = { version = "4.5.20", features = ["derive"] }
+tempfile = "3.2"
+rand = "0.10.1"
+nalgebra = "0.34"
+nalgebra-sparse = "0.11"
+
+colored = "3"
+log = "0.4"
+rustc-hash = "2.1"
