@@ -1,6 +1,6 @@
 [package]
 name = "chickpea-rs"
-version = "0.4.1"
+version = "0.4.2"
 edition = "2021"
 rust-version = "1.91"
 license = "MIT"
@@ -29,18 +29,16 @@ path = "src/main.rs"
 default = []
 cuda = [
     "legume-numeric/cuda",
-    "data-beans/cuda",
     "graph-embedding-util/cuda",
 ]
 metal = [
     "legume-numeric/metal",
-    "data-beans/metal",
     "graph-embedding-util/metal",
 ]
 hdf5 = ["data-beans/hdf5"]
 
 [dependencies]
-data-beans = { version = "0.6.12", features = ["aux", "alg"] }
+data-beans = { version = "0.6.21", features = ["aux", "alg"] }
 legume-numeric = { version = "0.8.12", features = ["matrix", "param", "candle", "mcmc"] }
 genomic-data = { version = "0.4.1", package = "legume-genomic-types" }
 graph-embedding-util = { version = "0.8.4", package = "legume-graph-embedding" }
