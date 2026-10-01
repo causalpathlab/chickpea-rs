@@ -41,7 +41,7 @@ hdf5 = ["data-beans/hdf5"]
 
 [dependencies]
 data-beans = { version = "0.6.12", features = ["aux", "alg"] }
-legume-numeric = { version = "0.8.10", features = ["matrix", "param", "candle", "mcmc"] }
+legume-numeric = { version = "0.8.12", features = ["matrix", "param", "candle", "mcmc"] }
 genomic-data = { version = "0.4.1", package = "legume-genomic-types" }
 graph-embedding-util = { version = "0.8.4", package = "legume-graph-embedding" }
 
