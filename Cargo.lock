@@ -593,7 +593,7 @@ dependencies = [
 
 [[package]]
 name = "chickpea-rs"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "anyhow",
  "clap",
@@ -1121,9 +1121,9 @@ dependencies = [
 
 [[package]]
 name = "data-beans"
-version = "0.6.21"
+version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "34e32de287ec6dc486a9771a7abc69f032981c44f8e34929c57d6ce7a4d67d10"
+checksum = "da9128476b569d2b63c77ce33735fdecb43ecd4188242703079f094454893b6e"
 dependencies = [
  "anyhow",
  "approx",
@@ -1135,6 +1135,7 @@ dependencies = [
  "hdf5-metno",
  "indicatif",
  "indicatif-log-bridge",
+ "legume-genomic-types",
  "legume-numeric",
  "libz-sys",
  "log",
@@ -1324,9 +1325,9 @@ checksum = "252afb9ae5eaa683babdc6a068b3f5726eb19e05070c731f9b2a23a7c3e8ed34"
 
 [[package]]
 name = "ellip"
-version = "1.1.1"
+version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ddf8add35b2174706baf49bac13fd472a423b62829c0a1878e4e57926a8c8c89"
+checksum = "00bc906ba318f3f863c278d47da93fec3b48e8709fb6398c2664944a1e8ddb43"
 dependencies = [
  "num-lazy",
  "num-traits",
@@ -2431,9 +2432,9 @@ dependencies = [
 
 [[package]]
 name = "lazy_static"
-version = "1.5.0"
+version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
+checksum = "20870f649af7073d53e38067b2a84312175d56ea15217e1b15bc83506ec50afb"
 
 [[package]]
 name = "legume-enrichment"
@@ -2456,9 +2457,9 @@ dependencies = [
 
 [[package]]
 name = "legume-genomic-types"
-version = "0.4.1"
+version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "10b0b2bb572239d169ad016c359680d10c2f24009b87a964fcb4c6ec87eabf91"
+checksum = "a1abfb0da9e371a7c9cb679d5d062f6784bf3115824c76613a95a0a12a319df0"
 dependencies = [
  "anyhow",
  "dashmap",
@@ -2471,9 +2472,9 @@ dependencies = [
 
 [[package]]
 name = "legume-graph-embedding"
-version = "0.8.4"
+version = "0.8.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "77f206329a11d39d7473d609b14931f2d8e7721952ef4b7f43b70053026c374e"
+checksum = "943967af218995b3cfc8a35fa9a329c0574148b3fd993c9d5080120ec2b7cd22"
 dependencies = [
  "anyhow",
  "clap",
@@ -2494,9 +2495,9 @@ dependencies = [
 
 [[package]]
 name = "legume-numeric"
-version = "0.8.14"
+version = "0.8.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0e95da6fa6c45c24c3248e87235127614bf7901876db0af8a3a788bf4b424a86"
+checksum = "88aca87c0b52c7184bd85eae951ff6e1f4b18c2f6191decc24b8aa40d438a0e3"
 dependencies = [
  "anyhow",
  "approx",
