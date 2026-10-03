@@ -38,7 +38,7 @@ metal = [
 hdf5 = ["data-beans/hdf5"]
 
 [dependencies]
-data-beans = { version = "0.7.3", features = ["aux", "alg"] }
+data-beans = { version = "0.7.5", features = ["aux", "alg"] }
 legume-numeric = { version = "0.8.16", features = ["matrix", "param", "candle", "mcmc"] }
 genomic-data = { version = "0.5.3", package = "legume-genomic-types" }
 graph-embedding-util = { version = "0.8.7", package = "legume-graph-embedding" }
