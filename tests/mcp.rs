@@ -214,7 +214,12 @@ fn a_bad_run_is_refused_before_it_starts() {
     let err = s
         .call("p2g_run", with(json!({"flags": {"cis-window": "far"}})))
         .unwrap_err();
-    assert!(err.contains("--cis-window"), "{err}");
+    // clap's one line, without its pointer to a --help the agent cannot give.
+    assert!(
+        err.starts_with("chickpea ") && err.contains("--cis-window"),
+        "{err}"
+    );
+    assert!(!err.contains('\n') && !err.contains("--help"), "{err}");
 
     let err = s
         .call("p2g_run", with(json!({"flags": {"no-qc": "yes"}})))
@@ -441,5 +446,5 @@ fn an_input_spelled_as_a_flag_is_pointed_to_its_argument() {
     let mut s = Session::start(dir.path());
     let args = json!({"rna": rna, "atac": atac, "flags": {"gene_coords": "g.tsv"}});
     let err = s.call("p2g_run", args).unwrap_err();
-    assert!(err.contains("own argument gene_coords"), "{err}");
+    assert!(err.contains("as `gene_coords`, not as a flag"), "{err}");
 }

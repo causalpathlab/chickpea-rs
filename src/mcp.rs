@@ -5,8 +5,10 @@
 
 use crate::p2g::workflow::{table, tables, LINKS};
 use crate::p2g::PeakToGeneArgs;
-use clap::{ArgAction, Args, FromArgMatches};
-use legume_mcp::{Call, Content, Handler, ToolSpec};
+use anyhow::Context;
+use clap::{Args, FromArgMatches};
+use legume_mcp::cli::{check, describe, settable, to_argv};
+use legume_mcp::{command_line, parse_args, shown_path, Call, Content, Handler, ToolSpec};
 use legume_numeric::matrix::parquet::read_table_columns;
 use rustc_hash::FxHashSet;
 use serde::Deserialize;
@@ -28,8 +30,9 @@ with `job_status` / `job_wait`), and never over a run. When it is done, \
 `p2g_links` reads the run's links (gene, peak, distance, abc, gate, corr, \
 score), the best first, for all genes or the ones named.";
 
-/// The run's own arguments: given by name to `p2g_run`, never as flags.
-const NAMED: [&str; 6] = ["rna", "atac", "gene-coords", "gff-file", "batch", "out"];
+/// The run's own arguments, by clap id, which is also how `p2g_run` names
+/// them: given by name, never as flags.
+const OWN: [&str; 6] = ["rna", "atac", "gene_coords", "gff_file", "batch", "out"];
 
 /// The tools, and peak-to-gene's command line to read the flags from and
 /// check a run against.
@@ -53,101 +56,27 @@ impl Handler for Server {
     fn call(&mut self, name: &str, args: Value, cx: &Call) -> anyhow::Result<Vec<Content>> {
         let reply = match name {
             "p2g_flags" => self.flags(),
-            "p2g_run" => self.run(parse(args)?, cx)?,
-            "p2g_links" => links(parse(args)?)?,
+            "p2g_run" => self.run(parse_args(args)?, cx)?,
+            "p2g_links" => links(parse_args(args)?)?,
             _ => unreachable!("the server answers unknown tools itself"),
         };
         Ok(vec![Content::Json(reply)])
     }
 }
 
-fn is_switch(arg: &clap::Arg) -> bool {
-    matches!(arg.get_action(), ArgAction::SetTrue | ArgAction::SetFalse)
-}
-
 impl Server {
-    /// The flags a run takes, without the run's own arguments; hidden ones
-    /// are taken but not listed.
-    fn flag_args(&self) -> impl Iterator<Item = (&str, &clap::Arg)> {
-        self.cli.get_arguments().filter_map(|a| {
-            let long = a.get_long()?;
-            (long != "help" && !NAMED.contains(&long)).then_some((long, a))
-        })
-    }
-
+    /// The flags an agent sees: the visible ones, without the run's own.
     fn flags(&self) -> Value {
-        let flags: Vec<Value> = self
-            .flag_args()
-            .filter(|(_, a)| !a.is_hide_set())
-            .map(|(long, a)| {
-                let mut flag = json!({
-                    "flag": format!("--{long}"),
-                    "help": a.get_help().map(|h| h.to_string()),
-                });
-                if is_switch(a) {
-                    flag["switch"] = true.into();
-                } else {
-                    let default: Vec<_> = a
-                        .get_default_values()
-                        .iter()
-                        .map(|v| v.to_string_lossy())
-                        .collect();
-                    if !default.is_empty() {
-                        flag["default"] = default.join(",").into();
-                    }
-                    let choices: Vec<String> = a
-                        .get_possible_values()
-                        .iter()
-                        .filter(|v| !v.is_hide_set())
-                        .map(|v| v.get_name().to_string())
-                        .collect();
-                    if !choices.is_empty() {
-                        flag["choices"] = choices.into();
-                    }
-                }
-                flag
-            })
+        let flags: Vec<Value> = settable(&self.cli)
+            .filter(|a| !a.is_hide_set() && !OWN.contains(&a.get_id().as_str()))
+            .map(describe)
             .collect();
         json!({ "command": "chickpea peak-to-gene", "flags": flags })
     }
 
-    /// `flags`, as p2g_run takes them, on peak-to-gene's command line.
-    fn flag_argv(&self, flags: &Map<String, Value>) -> anyhow::Result<Vec<String>> {
-        let mut argv: Vec<String> = Vec::new();
-        for (flag, value) in flags {
-            let long = flag.trim_start_matches('-').replace('_', "-");
-            anyhow::ensure!(
-                !NAMED.contains(&long.as_str()),
-                "--{long} is p2g_run's own argument {}, not a flag",
-                long.replace('-', "_")
-            );
-            let (_, arg) = self.flag_args().find(|(l, _)| *l == long).ok_or_else(|| {
-                anyhow::anyhow!("peak-to-gene has no flag --{long}: p2g_flags lists them")
-            })?;
-            if value.is_null() {
-                continue; // Null leaves the flag at its default.
-            }
-            if is_switch(arg) {
-                match value {
-                    Value::Bool(true) => argv.push(format!("--{long}")),
-                    Value::Bool(false) => {}
-                    v => anyhow::bail!("--{long} is a switch: true or false, not {v}"),
-                }
-            } else {
-                let text = match value {
-                    Value::Array(vs) => vs.iter().map(text).collect::<Vec<_>>().join(","),
-                    v => text(v),
-                };
-                // `=`: a value may start with `-`, and some flags take no other form.
-                argv.push(format!("--{long}={text}"));
-            }
-        }
-        Ok(argv)
-    }
-
     fn run(&self, a: RunArgs, cx: &Call) -> anyhow::Result<Value> {
         // The flags first, so a misplaced input is named as such.
-        let flags = self.flag_argv(&a.flags)?;
+        let flags = to_argv(&self.cli, &a.flags, &OWN.map(|id| (id, id)), "p2g_flags")?;
         let positions = match (&a.gene_coords, &a.gff_file) {
             (Some(tsv), None) => ("--gene-coords", tsv),
             (None, Some(gff)) => ("--gff-file", gff),
@@ -155,7 +84,7 @@ impl Server {
         };
         // Paths from the root: the records' replay of the run reads the
         // same files wherever it starts.
-        let mut argv: Vec<String> = vec!["peak-to-gene".into()];
+        let mut argv: Vec<String> = Vec::new();
         let inputs = [("--rna", &a.rna), ("--atac", &a.atac), positions];
         for (flag, path) in inputs
             .into_iter()
@@ -167,11 +96,16 @@ impl Server {
         }
         let out = match a.out.as_deref().map(str::trim) {
             Some(out) if !out.is_empty() => shown_path(Path::new(out)),
-            _ => free_default(cx)?,
+            _ => {
+                cx.free_prefix("p2g", |out| Ok(tables(out)), |_| false)
+                    .context("give out, the output prefix")?
+                    .0
+            }
         };
         argv.extend(["--out".into(), out.clone()]);
         argv.extend(flags);
-        let matches = self.cli.clone().try_get_matches_from(&argv).map_err(|e| {
+        // clap's first line: the rest points to a --help the agent cannot give.
+        let matches = check(&self.cli, &argv).map_err(|e| {
             let msg = e.to_string();
             let first = msg.lines().next().unwrap_or_default();
             anyhow::anyhow!("chickpea {}", first.trim_start_matches("error: "))
@@ -189,7 +123,11 @@ impl Server {
         }
 
         let summary = format!("peak-to-gene links of {} and {}", a.rna, a.atac);
-        let mut cmd = legume_mcp::own_command(&argv)?;
+        let command = [String::from("peak-to-gene")]
+            .into_iter()
+            .chain(argv)
+            .collect::<Vec<_>>();
+        let mut cmd = legume_mcp::own_command(&command)?;
         // Info logs, so a run's progress reaches job_status.
         if std::env::var_os("RUST_LOG").is_none() {
             cmd.env("RUST_LOG", "info");
@@ -208,7 +146,7 @@ impl Server {
             )
         };
         let mut reply = json!({
-            "command": format!("chickpea {}", argv.join(" ")),
+            "command": format!("chickpea {}", command_line(&command)),
             "note": note,
         });
         reply[key] = made.iter().map(|p| p.to_string_lossy()).collect();
@@ -217,25 +155,6 @@ impl Server {
         }
         Ok(reply)
     }
-}
-
-/// The first of `p2g`, `p2g-2`, ... in today's results folder that no run
-/// has written and no job is writing.
-fn free_default(cx: &Call) -> anyhow::Result<String> {
-    let dir = cx
-        .results_dir()
-        .ok_or_else(|| anyhow::anyhow!("give out, the output prefix"))?;
-    let free = (1..)
-        .map(|k| match k {
-            1 => "p2g".to_string(),
-            k => format!("p2g-{k}"),
-        })
-        .map(|name| shown_path(&dir.join(name)))
-        .find(|out| {
-            let made = tables(out);
-            made.iter().all(|p| !p.exists()) && cx.ensure_free(&made).is_ok()
-        });
-    Ok(free.expect("an unused name"))
 }
 
 /// Keep the `top` best of `rows` by `scores`, highest first and undefined
@@ -346,27 +265,6 @@ struct LinksArgs {
 
 fn top_links() -> usize {
     20
-}
-
-/// The arguments of a call, or what is wrong with them.
-fn parse<T: serde::de::DeserializeOwned>(args: Value) -> anyhow::Result<T> {
-    serde_json::from_value(args).map_err(|e| anyhow::anyhow!("arguments: {e}"))
-}
-
-/// `p` as results give paths: from the root.
-fn shown_path(p: &Path) -> String {
-    std::path::absolute(p)
-        .unwrap_or_else(|_| p.to_path_buf())
-        .to_string_lossy()
-        .into_owned()
-}
-
-/// A flag's value as typed on the command line.
-fn text(v: &Value) -> String {
-    match v {
-        Value::String(s) => s.clone(),
-        v => v.to_string(),
-    }
 }
 
 fn specs() -> Vec<ToolSpec> {

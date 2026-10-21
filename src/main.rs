@@ -115,25 +115,13 @@ fn main() -> anyhow::Result<()> {
 
     match &cli.commands {
         Commands::PeakToGene(args) => p2g::run_peak_to_gene(args),
-        Commands::Mcp => {
-            // The project's folder, so the paths an agent gives are read
-            // from the project, as the records are.
-            let root = std::env::var_os(legume_mcp::project::ROOT_ENV).filter(|r| !r.is_empty());
-            if let Some(root) = root {
-                let root = std::path::absolute(&root)?;
-                std::env::set_current_dir(&root)
-                    .map_err(|e| anyhow::anyhow!("project {}: {e}", root.display()))?;
-                // Absolute, so the records find the project from inside it.
-                std::env::set_var(legume_mcp::project::ROOT_ENV, &root);
-            }
-            legume_mcp::serve(
-                legume_mcp::ServerInfo {
-                    name: mcp::SERVER.into(),
-                    version: env!("CARGO_PKG_VERSION").into(),
-                    instructions: Some(mcp::INSTRUCTIONS.into()),
-                },
-                mcp::Server::default(),
-            )
-        }
+        Commands::Mcp => legume_mcp::serve_in_project(
+            legume_mcp::ServerInfo {
+                name: mcp::SERVER.into(),
+                version: env!("CARGO_PKG_VERSION").into(),
+                instructions: Some(mcp::INSTRUCTIONS.into()),
+            },
+            mcp::Server::default(),
+        ),
     }
 }
