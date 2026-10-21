@@ -214,9 +214,12 @@ fn a_bad_run_is_refused_before_it_starts() {
     let err = s
         .call("p2g_run", with(json!({"flags": {"cis-window": "far"}})))
         .unwrap_err();
-    // clap's one line, without its pointer to a --help the agent cannot give.
+    // legume-mcp's one line of clap's refusal, under the command as
+    // p2g_flags names it, without a pointer to a --help the agent cannot give.
     assert!(
-        err.starts_with("chickpea ") && err.contains("--cis-window"),
+        err.starts_with("chickpea peak-to-gene: ")
+            && err.contains("--cis-window")
+            && err.contains("far"),
         "{err}"
     );
     assert!(!err.contains('\n') && !err.contains("--help"), "{err}");

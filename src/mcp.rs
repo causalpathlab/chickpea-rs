@@ -42,7 +42,7 @@ pub struct Server {
 
 impl Default for Server {
     fn default() -> Self {
-        let mut cli = PeakToGeneArgs::augment_args(clap::Command::new("peak-to-gene"));
+        let mut cli = PeakToGeneArgs::augment_args(clap::Command::new("chickpea peak-to-gene"));
         cli.build();
         Server { cli }
     }
@@ -71,7 +71,7 @@ impl Server {
             .filter(|a| !a.is_hide_set() && !OWN.contains(&a.get_id().as_str()))
             .map(describe)
             .collect();
-        json!({ "command": "chickpea peak-to-gene", "flags": flags })
+        json!({ "command": self.cli.get_name(), "flags": flags })
     }
 
     fn run(&self, a: RunArgs, cx: &Call) -> anyhow::Result<Value> {
@@ -104,13 +104,7 @@ impl Server {
         };
         argv.extend(["--out".into(), out.clone()]);
         argv.extend(flags);
-        // clap's first line: the rest points to a --help the agent cannot give.
-        let matches = check(&self.cli, &argv).map_err(|e| {
-            let msg = e.to_string();
-            let first = msg.lines().next().unwrap_or_default();
-            anyhow::anyhow!("chickpea {}", first.trim_start_matches("error: "))
-        })?;
-        let made: Vec<PathBuf> = PeakToGeneArgs::from_arg_matches(&matches)?
+        let made: Vec<PathBuf> = PeakToGeneArgs::from_arg_matches(&check(&self.cli, &argv)?)?
             .outputs()
             .iter()
             .map(|p| shown_path(p).into())
