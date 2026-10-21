@@ -82,6 +82,14 @@ pub fn table(out: &str, stem: &str) -> String {
     format!("{out}.{stem}.parquet")
 }
 
+/// Every table a run with output prefix `out` writes.
+pub fn tables(out: &str) -> Vec<std::path::PathBuf> {
+    OUTPUT_STEMS
+        .iter()
+        .map(|stem| table(out, stem).into())
+        .collect()
+}
+
 pub fn run_links(
     input: &TwoTrackInput,
     cfg: &LinkConfig,

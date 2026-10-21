@@ -12,7 +12,7 @@ use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 /// in a folder of its own, so a relative path that resolved against its
 /// working directory rather than the project would land elsewhere.
 struct Session {
-    _cwd: tempfile::TempDir,
+    _cwd: Option<tempfile::TempDir>,
     child: Child,
     stdin: ChildStdin,
     stdout: BufReader<ChildStdout>,
@@ -22,9 +22,17 @@ struct Session {
 impl Session {
     fn start(project: &Path) -> Self {
         let cwd = tempfile::tempdir().unwrap();
+        let path = cwd.path().to_path_buf();
+        Self::start_in(&path, project, Some(cwd))
+    }
+
+    /// A server started in `cwd`, with `LEGUME_MCP_PROJECT` set to `project`
+    /// as given (relative to `cwd`, maybe).
+    /// `keep` is a folder to remove when the session ends.
+    fn start_in(cwd: &Path, project: &Path, keep: Option<tempfile::TempDir>) -> Self {
         let mut child = Command::new(env!("CARGO_BIN_EXE_chickpea"))
             .arg("mcp")
-            .current_dir(cwd.path())
+            .current_dir(cwd)
             .env("LEGUME_MCP_PROJECT", project)
             .env("LEGUME_MCP_WATCH", "off")
             .stdin(Stdio::piped())
@@ -35,7 +43,7 @@ impl Session {
         let stdin = child.stdin.take().unwrap();
         let stdout = BufReader::new(child.stdout.take().unwrap());
         let mut s = Session {
-            _cwd: cwd,
+            _cwd: keep,
             child,
             stdin,
             stdout,
@@ -356,4 +364,82 @@ fn links_rank_best_first_with_undefined_scores_last() {
     let mut rows: Vec<usize> = (0..scores.len()).collect();
     chickpea::mcp::best_first(&scores, &mut rows, 2);
     assert_eq!(rows, [2, 0]);
+}
+
+#[test]
+fn background_runs_without_an_out_do_not_collide() {
+    let dir = tempfile::tempdir().unwrap();
+    let (rna, atac) = write_fixture(dir.path());
+    let genes = write_gene_coords(dir.path());
+    let mut s = Session::start(dir.path());
+    // A null flag is left out, not passed as "null".
+    let mut flags = small();
+    flags["n-clusters"] = Value::Null;
+    let args = json!({"rna": rna, "atac": atac, "gene_coords": genes, "flags": flags});
+    let first = s.call("p2g_run", args.clone()).unwrap();
+    let second = s.call("p2g_run", args).unwrap();
+    assert!(
+        !first["command"].as_str().unwrap().contains("n-clusters"),
+        "{first}"
+    );
+    assert_ne!(first["writes"], second["writes"]);
+    for started in [&first, &second] {
+        let state = s.wait(started["job"].as_str().unwrap());
+        assert_eq!(state["state"], "done", "{state}");
+    }
+}
+
+#[test]
+fn a_relative_project_is_taken_from_where_the_server_starts() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join("proj");
+    std::fs::create_dir(&project).unwrap();
+    write_fixture(&project);
+    let genes = write_gene_coords(&project);
+    let mut s = Session::start_in(dir.path(), Path::new("proj"), None);
+    let args = json!({
+        "rna": "rna.zarr", "atac": "atac.zarr", "gene_coords": genes, "flags": small(),
+        "background": false,
+    });
+    let ran = s.call("p2g_run", args).unwrap();
+    let results = project.join("results").canonicalize().unwrap();
+    for f in ran["written"].as_array().unwrap() {
+        let f = Path::new(f.as_str().unwrap()).canonicalize().unwrap();
+        assert!(f.starts_with(&results), "{}", f.display());
+    }
+    assert!(!project.join("proj").exists());
+}
+
+#[test]
+fn without_qc_no_report_is_expected() {
+    let dir = tempfile::tempdir().unwrap();
+    let (rna, atac) = write_fixture(dir.path());
+    let genes = write_gene_coords(dir.path());
+    let out = dir.path().join("run");
+    let mut s = Session::start(dir.path());
+    let mut flags = small();
+    flags["no-qc"] = json!(true);
+    flags["qc-report"] = json!("qc.tsv");
+    let args = json!({
+        "rna": rna, "atac": atac, "gene_coords": genes, "out": out, "flags": flags,
+        "background": false,
+    });
+    let ran = s.call("p2g_run", args).unwrap();
+    let written = ran["written"].as_array().unwrap();
+    assert!(
+        !written
+            .iter()
+            .any(|w| w.as_str().unwrap().ends_with("qc.tsv")),
+        "{ran}"
+    );
+}
+
+#[test]
+fn an_input_spelled_as_a_flag_is_pointed_to_its_argument() {
+    let dir = tempfile::tempdir().unwrap();
+    let (rna, atac) = write_fixture(dir.path());
+    let mut s = Session::start(dir.path());
+    let args = json!({"rna": rna, "atac": atac, "flags": {"gene_coords": "g.tsv"}});
+    let err = s.call("p2g_run", args).unwrap_err();
+    assert!(err.contains("own argument gene_coords"), "{err}");
 }

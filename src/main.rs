@@ -120,9 +120,11 @@ fn main() -> anyhow::Result<()> {
             // from the project, as the records are.
             let root = std::env::var_os(legume_mcp::project::ROOT_ENV).filter(|r| !r.is_empty());
             if let Some(root) = root {
-                std::env::set_current_dir(&root).map_err(|e| {
-                    anyhow::anyhow!("project {}: {e}", std::path::Path::new(&root).display())
-                })?;
+                let root = std::path::absolute(&root)?;
+                std::env::set_current_dir(&root)
+                    .map_err(|e| anyhow::anyhow!("project {}: {e}", root.display()))?;
+                // Absolute, so the records find the project from inside it.
+                std::env::set_var(legume_mcp::project::ROOT_ENV, &root);
             }
             legume_mcp::serve(
                 legume_mcp::ServerInfo {

@@ -4,7 +4,7 @@ use crate::common::*;
 use crate::p2g::cis::AbcKernel;
 use crate::p2g::input::load_gene_coords_tsv;
 use crate::p2g::two_track::{TwoTrackConfig, TwoTrackInput};
-use crate::p2g::workflow::{run_links, table, LinkConfig, LINKS, OUTPUT_STEMS};
+use crate::p2g::workflow::{run_links, table, tables, LinkConfig, LINKS};
 use data_beans::sparse_io::open_sparse_matrix_by_path;
 use genomic_data::coordinates::load_gene_tss;
 use rustc_hash::FxHashSet;
@@ -161,13 +161,14 @@ pub struct PeakToGeneArgs {
 }
 
 impl PeakToGeneArgs {
-    /// Every file the run writes: its tables, and the QC report if asked.
+    /// Every file the run writes: its tables, and the QC report when QC
+    /// runs and one is asked for.
     pub fn outputs(&self) -> Vec<std::path::PathBuf> {
-        let tables = OUTPUT_STEMS.iter().map(|stem| table(&self.out, stem));
-        tables
-            .chain(self.qc.qc_report.as_deref().map(String::from))
-            .map(Into::into)
-            .collect()
+        let mut made = tables(&self.out);
+        if self.qc.to_config().is_some() {
+            made.extend(self.qc.qc_report.as_deref().map(Into::into));
+        }
+        made
     }
 }
 

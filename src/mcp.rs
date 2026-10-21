@@ -3,7 +3,7 @@
 //! job unless asked otherwise, since a run takes minutes to hours) in the
 //! project's records, and read the links a run wrote.
 
-use crate::p2g::workflow::{table, LINKS, OUTPUT_STEMS};
+use crate::p2g::workflow::{table, tables, LINKS};
 use crate::p2g::PeakToGeneArgs;
 use clap::{ArgAction, Args, FromArgMatches};
 use legume_mcp::{Call, Content, Handler, ToolSpec};
@@ -111,7 +111,43 @@ impl Server {
         json!({ "command": "chickpea peak-to-gene", "flags": flags })
     }
 
+    /// `flags`, as p2g_run takes them, on peak-to-gene's command line.
+    fn flag_argv(&self, flags: &Map<String, Value>) -> anyhow::Result<Vec<String>> {
+        let mut argv: Vec<String> = Vec::new();
+        for (flag, value) in flags {
+            let long = flag.trim_start_matches('-').replace('_', "-");
+            anyhow::ensure!(
+                !NAMED.contains(&long.as_str()),
+                "--{long} is p2g_run's own argument {}, not a flag",
+                long.replace('-', "_")
+            );
+            let (_, arg) = self.flag_args().find(|(l, _)| *l == long).ok_or_else(|| {
+                anyhow::anyhow!("peak-to-gene has no flag --{long}: p2g_flags lists them")
+            })?;
+            if value.is_null() {
+                continue; // Null leaves the flag at its default.
+            }
+            if is_switch(arg) {
+                match value {
+                    Value::Bool(true) => argv.push(format!("--{long}")),
+                    Value::Bool(false) => {}
+                    v => anyhow::bail!("--{long} is a switch: true or false, not {v}"),
+                }
+            } else {
+                let text = match value {
+                    Value::Array(vs) => vs.iter().map(text).collect::<Vec<_>>().join(","),
+                    v => text(v),
+                };
+                // `=`: a value may start with `-`, and some flags take no other form.
+                argv.push(format!("--{long}={text}"));
+            }
+        }
+        Ok(argv)
+    }
+
     fn run(&self, a: RunArgs, cx: &Call) -> anyhow::Result<Value> {
+        // The flags first, so a misplaced input is named as such.
+        let flags = self.flag_argv(&a.flags)?;
         let positions = match (&a.gene_coords, &a.gff_file) {
             (Some(tsv), None) => ("--gene-coords", tsv),
             (None, Some(gff)) => ("--gff-file", gff),
@@ -134,31 +170,7 @@ impl Server {
             _ => free_default(cx)?,
         };
         argv.extend(["--out".into(), out.clone()]);
-        for (flag, value) in &a.flags {
-            let long = flag.trim_start_matches('-');
-            anyhow::ensure!(
-                !NAMED.contains(&long),
-                "--{long} is p2g_run's own argument {}, not a flag",
-                long.replace('-', "_")
-            );
-            let (_, arg) = self.flag_args().find(|(l, _)| *l == long).ok_or_else(|| {
-                anyhow::anyhow!("peak-to-gene has no flag --{long}: p2g_flags lists them")
-            })?;
-            if is_switch(arg) {
-                match value {
-                    Value::Bool(true) => argv.push(format!("--{long}")),
-                    Value::Bool(false) => {}
-                    v => anyhow::bail!("--{long} is a switch: true or false, not {v}"),
-                }
-            } else {
-                let text = match value {
-                    Value::Array(vs) => vs.iter().map(text).collect::<Vec<_>>().join(","),
-                    v => text(v),
-                };
-                // `=`: a value may start with `-`, and some flags take no other form.
-                argv.push(format!("--{long}={text}"));
-            }
-        }
+        argv.extend(flags);
         let matches = self.cli.clone().try_get_matches_from(&argv).map_err(|e| {
             let msg = e.to_string();
             let first = msg.lines().next().unwrap_or_default();
@@ -205,14 +217,6 @@ impl Server {
         }
         Ok(reply)
     }
-}
-
-/// The tables a run with output prefix `out` writes.
-fn tables(out: &str) -> Vec<PathBuf> {
-    OUTPUT_STEMS
-        .iter()
-        .map(|stem| table(out, stem).into())
-        .collect()
 }
 
 /// The first of `p2g`, `p2g-2`, ... in today's results folder that no run
@@ -391,7 +395,7 @@ fn specs() -> Vec<ToolSpec> {
                     "gff_file": path("GFF/GTF annotation for gene TSS (this or gene_coords)"),
                     "batch": path("Batch labels, one per barcode"),
                     "out": path("Output prefix: {out}.links.parquet and the rest [default: results/<today>/p2g]"),
-                    "flags": {"type": "object", "description": "peak-to-gene's flags by name, as p2g_flags lists them (a switch takes true or false): {\"cis-window\": 250000}"},
+                    "flags": {"type": "object", "description": "peak-to-gene's flags by name, as p2g_flags lists them (a switch takes true or false; null leaves a flag at its default): {\"cis-window\": 250000}"},
                     "background": {"type": "boolean", "description": "Run as a background job and return at once [default: true]; false waits for the run"},
                 },
                 "required": ["rna", "atac"],
