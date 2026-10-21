@@ -1,6 +1,6 @@
 [package]
 name = "chickpea-rs"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2021"
 rust-version = "1.91"
 license = "MIT"
@@ -38,10 +38,10 @@ metal = [
 hdf5 = ["data-beans/hdf5"]
 
 [dependencies]
-data-beans = { version = "0.8", features = ["aux", "alg"] }
-legume-numeric = { version = "0.9", features = ["matrix", "param", "candle", "mcmc"] }
+data-beans = { version = "0.10.2", features = ["aux", "alg"] }
+legume-numeric = { version = "0.9.5", features = ["matrix", "param", "candle", "mcmc"] }
 genomic-data = { version = "0.6", package = "legume-genomic-types" }
-graph-embedding-util = { version = "0.9", package = "legume-graph-embedding" }
+graph-embedding-util = { version = "0.10", package = "legume-graph-embedding" }
 
 anyhow = "1.0"
 clap = { version = "4.5.20", features = ["derive"] }
@@ -53,3 +53,8 @@ nalgebra-sparse = "0.11"
 colored = "3"
 log = "0.4"
 rustc-hash = "2.1"
+
+# `chickpea mcp`: the Model Context Protocol on stdio.
+legume-mcp = "0.4"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"

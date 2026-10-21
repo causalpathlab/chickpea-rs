@@ -59,6 +59,37 @@ pub struct LinkSummary {
     pub align_gap: f64,
 }
 
+/// The tables [`run_links`] writes, each at [`table`]`(out, stem)`.
+pub const GENE_EMBEDDING: &str = "gene_embedding";
+pub const CELL_EMBEDDING: &str = "cell_embedding";
+pub const PEAK_EMBEDDING: &str = "peak_embedding";
+pub const CELL_CLUSTERS: &str = "cell_clusters";
+pub const PEAKS: &str = "peaks";
+pub const LINKS: &str = "links";
+pub const LINKS_BY_CLUSTER: &str = "links_by_cluster";
+pub const OUTPUT_STEMS: [&str; 7] = [
+    GENE_EMBEDDING,
+    CELL_EMBEDDING,
+    PEAK_EMBEDDING,
+    CELL_CLUSTERS,
+    PEAKS,
+    LINKS,
+    LINKS_BY_CLUSTER,
+];
+
+/// Where a run with output prefix `out` writes table `stem`.
+pub fn table(out: &str, stem: &str) -> String {
+    format!("{out}.{stem}.parquet")
+}
+
+/// Every table a run with output prefix `out` writes.
+pub fn tables(out: &str) -> Vec<std::path::PathBuf> {
+    OUTPUT_STEMS
+        .iter()
+        .map(|stem| table(out, stem).into())
+        .collect()
+}
+
 pub fn run_links(
     input: &TwoTrackInput,
     cfg: &LinkConfig,
@@ -96,26 +127,21 @@ pub fn run_links(
     );
 
     let save = |stem: &str, m: &DMatrix<f32>, names: &[Box<str>], axis: &str| {
-        ge::save_embedding(
-            &format!("{out}.{stem}.parquet"),
-            &m.to_tensor(&dev)?,
-            names,
-            axis,
-        )
+        ge::save_embedding(&table(out, stem), &m.to_tensor(&dev)?, names, axis)
     };
-    save("gene_embedding", &emb.rna_rows, &emb.genes, "gene")?;
-    save("cell_embedding", &cell_rows, &barcodes, "cell")?;
-    save("peak_embedding", &emb.peak_rows, &emb.peak_names, "peak")?;
+    save(GENE_EMBEDDING, &emb.rna_rows, &emb.genes, "gene")?;
+    save(CELL_EMBEDDING, &cell_rows, &barcodes, "cell")?;
+    save(PEAK_EMBEDDING, &emb.peak_rows, &emb.peak_names, "peak")?;
 
     let label_i32: Vec<i32> = kept_labels.iter().map(|&l| l as i32).collect();
     write_table(
-        &format!("{out}.cell_clusters.parquet"),
+        &table(out, CELL_CLUSTERS),
         &[
             ("cell".into(), Column::Str(&barcodes)),
             ("cluster".into(), Column::I32(&label_i32)),
         ],
     )?;
-    write_peaks(&format!("{out}.peaks.parquet"), &emb.peak_names)?;
+    write_peaks(&table(out, PEAKS), &emb.peak_names)?;
     write_links(out, &emb, &emb.gate_w, &lambda)?;
 
     Ok(LinkSummary {
@@ -230,7 +256,7 @@ fn write_links(
         .collect();
     let score: Vec<f32> = w.iter().zip(&emb.gate_corr).map(|(w, c)| w * c).collect();
     write_table(
-        &format!("{out}.links.parquet"),
+        &table(out, LINKS),
         &[
             ("gene".into(), Column::Str(&gene)),
             ("peak".into(), Column::Str(&peak)),
@@ -260,7 +286,7 @@ fn write_links(
         b_c.push(b);
     })?;
     write_table(
-        &format!("{out}.links_by_cluster.parquet"),
+        &table(out, LINKS_BY_CLUSTER),
         &[
             ("gene_idx".into(), Column::I32(&g_i)),
             ("peak_idx".into(), Column::I32(&p_i)),

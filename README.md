@@ -110,6 +110,25 @@ Outputs, all `{out}.*.parquet`:
 | `peak_embedding`, `peaks` | each peak's module row; `peak`, `chromosome`, `start`, `end` |
 | `cell_embedding`, `cell_clusters` | per-cell rows; `cell`, `cluster` |
 
+### Agents (MCP)
+
+`chickpea mcp` serves chickpea's tools to an agent over the Model Context
+Protocol on stdio:
+
+| Tool | What it does |
+|------|--------------|
+| `p2g_flags` | peak-to-gene's flags, read from the command line (help, default, choices) |
+| `p2g_run` | runs peak-to-gene as a child `chickpea`, checked first, as a background job by default (follow it with `job_status` / `job_wait`); never writes over a run |
+| `p2g_links` | a run's links, highest `score` first, for all genes or the ones named |
+
+Outputs the agent does not name go to `results/<today>/` under the project (the
+working directory, or `LEGUME_MCP_PROJECT`), beside a driver script that
+repeats the work and a lab notebook.
+
+```bash
+claude mcp add chickpea -e LEGUME_MCP_PROJECT="$PWD" -- chickpea mcp
+```
+
 ### Simulation
 
 Paired ATAC + RNA with ground-truth peak-gene links lives in

@@ -9,22 +9,13 @@ fn chickpea() -> Command {
     Command::new(env!("CARGO_BIN_EXE_chickpea"))
 }
 
-const SMALL: [&str; 14] = [
-    "--embedding-dim",
-    "8",
-    "--epochs",
-    "60",
-    "--num-levels",
-    "2",
-    "--sort-dim",
-    "3",
-    "--proj-dim",
-    "8",
-    "--feature-modules",
-    "4",
-    "--module-only-min-rows",
-    "30",
-];
+/// [`common::SMALL`] as command-line arguments.
+fn small() -> Vec<String> {
+    common::SMALL
+        .iter()
+        .flat_map(|(flag, value)| [format!("--{flag}"), value.to_string()])
+        .collect()
+}
 
 #[test]
 fn peak_to_gene_runs_end_to_end_and_writes_the_link_tables() {
@@ -43,7 +34,7 @@ fn peak_to_gene_runs_end_to_end_and_writes_the_link_tables() {
             &genes,
         ])
         .args(["--cis-window", "10000", "-o", &out])
-        .args(SMALL)
+        .args(small())
         .output()
         .unwrap();
     assert!(
@@ -75,4 +66,28 @@ fn gene_positions_are_required() {
     assert!(!st.status.success());
     let err = String::from_utf8_lossy(&st.stderr);
     assert!(err.contains("gene-coords") && err.contains("gff"), "{err}");
+}
+
+#[test]
+fn qc_report_is_written_when_asked() {
+    let dir = tempfile::tempdir().unwrap();
+    let (rna, atac) = write_fixture(dir.path());
+    let genes = write_gene_coords(dir.path());
+    let out = dir.path().join("run").to_string_lossy().into_owned();
+    let report = dir.path().join("qc.tsv");
+    let st = chickpea()
+        .args(["peak-to-gene", "--rna", &rna, "--atac", &atac])
+        .args(["--gene-coords", &genes, "--cis-window", "10000", "-o", &out])
+        .arg(format!("--qc-report={}", report.display()))
+        .args(small())
+        .output()
+        .unwrap();
+    assert!(
+        st.status.success(),
+        "{}",
+        String::from_utf8_lossy(&st.stderr)
+    );
+    let table = std::fs::read_to_string(&report).expect("the QC report");
+    assert!(table.starts_with("#cell\t"), "{table}");
+    assert_eq!(table.lines().count(), 1 + common::N_CELLS);
 }

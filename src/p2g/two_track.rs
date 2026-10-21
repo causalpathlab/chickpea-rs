@@ -231,6 +231,7 @@ pub fn embed_two_track(
         emit_finest_collapse: false,
         num_levels: cfg.num_levels,
         sort_dim: cfg.sort_dim,
+        partition: None,
         knn_pb_samples: 10,
         num_opt_iter: 30,
         proj_dim: cfg.proj_dim,
