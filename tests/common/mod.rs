@@ -8,6 +8,17 @@ use genomic_data::coordinates::GeneTss;
 use rand::rngs::StdRng;
 use rand::{RngExt, SeedableRng};
 
+/// Flags that keep a run on the fixture small, as `(flag, value)`.
+pub const SMALL: [(&str, &str); 7] = [
+    ("embedding-dim", "8"),
+    ("epochs", "60"),
+    ("num-levels", "2"),
+    ("sort-dim", "3"),
+    ("proj-dim", "8"),
+    ("feature-modules", "4"),
+    ("module-only-min-rows", "30"),
+];
+
 pub const N_GENES: usize = 24;
 pub const N_CELLS: usize = 120;
 /// Two peaks per gene: one at the TSS, one 3 kb upstream.

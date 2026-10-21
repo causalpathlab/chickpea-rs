@@ -4,7 +4,7 @@ use crate::common::*;
 use crate::p2g::cis::AbcKernel;
 use crate::p2g::input::load_gene_coords_tsv;
 use crate::p2g::two_track::{TwoTrackConfig, TwoTrackInput};
-use crate::p2g::workflow::{run_links, LinkConfig};
+use crate::p2g::workflow::{run_links, table, LinkConfig, LINKS, OUTPUT_STEMS};
 use data_beans::sparse_io::open_sparse_matrix_by_path;
 use genomic_data::coordinates::load_gene_tss;
 use rustc_hash::FxHashSet;
@@ -160,6 +160,17 @@ pub struct PeakToGeneArgs {
     out: Box<str>,
 }
 
+impl PeakToGeneArgs {
+    /// Every file the run writes: its tables, and the QC report if asked.
+    pub fn outputs(&self) -> Vec<std::path::PathBuf> {
+        let tables = OUTPUT_STEMS.iter().map(|stem| table(&self.out, stem));
+        tables
+            .chain(self.qc.qc_report.as_deref().map(String::from))
+            .map(Into::into)
+            .collect()
+    }
+}
+
 pub fn run_peak_to_gene(args: &PeakToGeneArgs) -> anyhow::Result<()> {
     mkdir_parent(&args.out)?;
 
@@ -182,6 +193,10 @@ pub fn run_peak_to_gene(args: &PeakToGeneArgs) -> anyhow::Result<()> {
             let mut v = SparseIoVec::new();
             v.push(Arc::from(rna), None)?;
             let report = data_beans::qc_lib::compute_qc(&v, &cfg, None)?;
+            if let Some(path) = &args.qc.qc_report {
+                data_beans::qc_lib::write_qc_report(path, &barcodes, &report)?;
+                info!("Wrote the per-cell QC report: {path}");
+            }
             Some(
                 report
                     .emit_idx_unmasked()
@@ -230,8 +245,12 @@ pub fn run_peak_to_gene(args: &PeakToGeneArgs) -> anyhow::Result<()> {
     };
     let summary = run_links(&input, &cfg, keep.as_ref())?;
     info!(
-        "Done: {} genes, {} peaks, {} cis pairs, {} clusters → {}.links.parquet",
-        summary.n_genes, summary.n_peaks, summary.n_pairs, summary.n_clusters, args.out
+        "Done: {} genes, {} peaks, {} cis pairs, {} clusters → {}",
+        summary.n_genes,
+        summary.n_peaks,
+        summary.n_pairs,
+        summary.n_clusters,
+        table(&args.out, LINKS)
     );
     Ok(())
 }

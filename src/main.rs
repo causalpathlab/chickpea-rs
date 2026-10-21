@@ -1,5 +1,5 @@
 use chickpea::common::*;
-use chickpea::p2g;
+use chickpea::{mcp, p2g};
 use colored::Colorize;
 
 const LOGO: &str = include_str!("../logo.txt");
@@ -83,7 +83,23 @@ enum Commands {
         after_long_help = ENV_HELP,
         aliases = ["p2g", "peak2gene"]
     )]
-    PeakToGene(p2g::PeakToGeneArgs),
+    PeakToGene(Box<p2g::PeakToGeneArgs>),
+
+    /// Server for agents (Model Context Protocol on stdio)
+    #[command(
+        long_about = "Serve chickpea's tools to an agent over the Model Context Protocol.\n\
+                      \n\
+                      stdin and stdout carry the protocol; logs go to stderr. The tools\n\
+                      list peak-to-gene's flags, run it in the background, and read the\n\
+                      links a run wrote. Outputs, a driver script and a lab notebook are\n\
+                      kept under the project (the working directory, or\n\
+                      LEGUME_MCP_PROJECT).\n\
+                      \n\
+                      Any MCP client runs it as the command `chickpea mcp`:\n\
+                      \x20 claude mcp add chickpea -e LEGUME_MCP_PROJECT=\"$PWD\" -- chickpea mcp\n\
+                      \x20 codex mcp add chickpea -- chickpea mcp"
+    )]
+    Mcp,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -99,5 +115,23 @@ fn main() -> anyhow::Result<()> {
 
     match &cli.commands {
         Commands::PeakToGene(args) => p2g::run_peak_to_gene(args),
+        Commands::Mcp => {
+            // The project's folder, so the paths an agent gives are read
+            // from the project, as the records are.
+            let root = std::env::var_os(legume_mcp::project::ROOT_ENV).filter(|r| !r.is_empty());
+            if let Some(root) = root {
+                std::env::set_current_dir(&root).map_err(|e| {
+                    anyhow::anyhow!("project {}: {e}", std::path::Path::new(&root).display())
+                })?;
+            }
+            legume_mcp::serve(
+                legume_mcp::ServerInfo {
+                    name: mcp::SERVER.into(),
+                    version: env!("CARGO_PKG_VERSION").into(),
+                    instructions: Some(mcp::INSTRUCTIONS.into()),
+                },
+                mcp::Server::default(),
+            )
+        }
     }
 }

@@ -2,4 +2,5 @@
 //! The library holds the pipeline; `main.rs` is the CLI over it.
 
 pub mod common;
+pub mod mcp;
 pub mod p2g;
