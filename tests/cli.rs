@@ -178,11 +178,21 @@ fn regroup_reads_each_samples_atac_from_the_run_record() {
     let read: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(format!("{again}.regroup.json")).unwrap())
             .unwrap();
-    assert_eq!(read["atac"][0], "a.atac.zarr");
+    assert_eq!(read["samples"][0]["atac"], "a.atac.zarr");
     assert_eq!(
-        read["atac"][1], "moved/b.atac.zarr",
+        read["samples"][1]["atac"], "moved/b.atac.zarr",
         "b's file in b's place"
     );
+
+    // Regrouping the regrouped run reads b's ATAC where it was given.
+    let twice = dir.path().join("twice").to_string_lossy().into_owned();
+    let st = regroup(&["--run", &again, "--groups", &groups, "-o", &twice]);
+    assert!(
+        st.status.success(),
+        "{}",
+        String::from_utf8_lossy(&st.stderr)
+    );
+    assert_eq!(links_by_cluster(&twice), links_by_cluster(&out));
 
     // A file that names none of the run's samples is refused.
     let other = dir.path().join("other").to_string_lossy().into_owned();

@@ -6,15 +6,17 @@
 //! ATAC counts), so the new run reads those and writes `groups`,
 //! `cell_clusters`, `peak_rates` and `links_by_cluster` under its own out,
 //! and `{out}.regroup.json`, which names the run whose `links`, `peaks`,
-//! `genes` and `gene_embedding` it uses (and the groups and ATAC it read),
+//! `genes` and `gene_embedding` it uses (and the groups and samples it read),
 //! so it opens as a run of its own (`chickpea view`) without copies. The
-//! ATAC files are those the run's record (`{run}.run.json`) names.
+//! ATAC files are those the run's record (`{run}.run.json`) names, or for a
+//! regrouped run, those its regroup record names.
 
 use crate::common::*;
 use crate::p2g::cis::CisPairs;
 use crate::p2g::groups::Groups;
 use crate::p2g::record::{
-    ensure_atac, folder, read_samples, recorded, relative_to, run_record, with_atac, write_json,
+    ensure_atac, folder, read_samples, recorded, relative_to, run_record, samples_json, with_atac,
+    write_json,
 };
 use crate::p2g::samples::{tags_of, Sample};
 use crate::p2g::workflow::{
@@ -44,7 +46,8 @@ pub struct RegroupArgs {
         value_hint = clap::ValueHint::FilePath,
         help = "ATAC peak counts in place of the files the run's record names",
         long_help = "ATAC peak counts (zarr/h5) in place of the files the run's record\n\
-                     ({run}.run.json) names, for a sample whose file has moved: each\n\
+                     ({run}.run.json, or a regrouped run's {run}.regroup.json) names,\n\
+                     for a sample whose file has moved: each\n\
                      stands in for the sample whose name its file name has (or whose\n\
                      recorded file has its name). A run without a record needs every\n\
                      sample's, in the order peak-to-gene was given them."
@@ -119,7 +122,7 @@ pub fn run_regroup(args: &RegroupArgs) -> anyhow::Result<()> {
     );
 
     let labels = Labels::given(&groups, &cells)?;
-    let samples = atac_of(&trained, &cells, &args.atac)?;
+    let samples = atac_of(&from, &trained, &cells, &args.atac)?;
     let atac: Vec<(&str, Option<&str>)> = samples
         .iter()
         .map(|s| (&*s.atac, s.name.as_deref()))
@@ -138,11 +141,17 @@ pub fn run_regroup(args: &RegroupArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Each sample of the run at `trained`, whose cells are `cells`, with the
-/// ATAC to read: its record's, `given` standing in for a sample's; for a
-/// run without a record, `given` in the order of the samples' tags.
-fn atac_of(trained: &str, cells: &[Box<str>], given: &[Box<str>]) -> anyhow::Result<Vec<Sample>> {
-    let recorded = match read_samples(trained)? {
+/// Each sample of run `from` (trained at `trained`), whose cells are
+/// `cells`, with the ATAC to read: its record's ([`read_samples`]),
+/// `given` standing in for a sample's; for a run without a record, `given`
+/// in the order of the samples' tags.
+fn atac_of(
+    from: &str,
+    trained: &str,
+    cells: &[Box<str>],
+    given: &[Box<str>],
+) -> anyhow::Result<Vec<Sample>> {
+    let recorded = match read_samples(from, trained)? {
         Some(recorded) => recorded,
         None => {
             anyhow::ensure!(
@@ -168,7 +177,8 @@ fn atac_of(trained: &str, cells: &[Box<str>], given: &[Box<str>]) -> anyhow::Res
 }
 
 /// `{out}.regroup.json`: the trained run whose tables `out` uses (relative
-/// to the record's folder, and in full), and the groups and ATAC it read.
+/// to the record's folder, and in full), the groups it read, and the
+/// samples with the ATAC it read.
 fn write_record(out: &str, trained: &str, groups: &str, samples: &[Sample]) -> anyhow::Result<()> {
     let record = regroup_record(out);
     let dir = folder(&record);
@@ -177,7 +187,7 @@ fn write_record(out: &str, trained: &str, groups: &str, samples: &[Sample]) -> a
         "run": run,
         "run_abs": run_abs,
         "groups": relative_to(groups, dir),
-        "atac": samples.iter().map(|s| relative_to(&s.atac, dir)).collect::<Vec<_>>(),
+        "samples": samples_json(samples, dir),
     });
     write_json(&record, &v)
 }

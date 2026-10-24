@@ -82,8 +82,8 @@ pub fn words(path: &str) -> Vec<String> {
 }
 
 /// Each sample's name, by the rule of senna's multiome load: the words its
-/// two files share, less those every sample's share (`pbmc1` of
-/// `pbmc1.rna` and `pbmc1.atac` beside `pbmc2.*`), joined by `_`; `g0`,
+/// two files share, less those every sample's share (`s1` of
+/// `s1.rna` and `s1.atac` beside `s2.*`), joined by `_`; `g0`,
 /// `g1`, … when that leaves a sample nameless or two alike.
 fn names(rna: &[Box<str>], atac: &[Box<str>]) -> Vec<Box<str>> {
     let shared: Vec<Vec<String>> = rna
@@ -221,7 +221,7 @@ pub const RNA_WORDS: &[&str] = &["rna", "gex", "gene", "genes", "expression"];
 pub const ATAC_WORDS: &[&str] = &["atac", "peak", "peaks", "chromatin", "accessibility"];
 pub const BOTH_WORDS: &[&str] = &["multiome", "arc", "joint"];
 
-/// What `path` holds by its name, when the name says (`pbmc1_gex.h5`,
+/// What `path` holds by its name, when the name says (`s1_gex.h5`,
 /// `s2.atac.zarr.zip`, `multiome.h5`).
 #[must_use]
 pub fn holds_by_name(path: &str) -> Option<Holds> {
@@ -266,7 +266,7 @@ fn sample_words(path: &str) -> Vec<String> {
 
 /// RNA files paired with ATAC files by their names, as indices into
 /// each: each pair the two that share the most words of a sample's name
-/// (`pbmc1_gex.h5` and `pbmc1_atac.h5`), the best first; files that share
+/// (`s1_gex.h5` and `s1_atac.h5`), the best first; files that share
 /// none, in the order given. The files left over have no partner (`None`).
 #[must_use]
 pub fn pair_by_name(
@@ -373,10 +373,10 @@ mod tests {
     fn samples_are_named_after_their_files() {
         assert_eq!(
             named(
-                &["d/pbmc1.rna.zarr.zip", "d/pbmc2.rna.zarr.zip"],
-                &["d/pbmc1.atac.zarr.zip", "d/pbmc2.atac.zarr.zip"]
+                &["d/s1.rna.zarr.zip", "d/s2.rna.zarr.zip"],
+                &["d/s1.atac.zarr.zip", "d/s2.atac.zarr.zip"]
             ),
-            [Some("pbmc1".into()), Some("pbmc2".into())]
+            [Some("s1".into()), Some("s2".into())]
         );
         assert_eq!(
             named(
@@ -391,24 +391,24 @@ mod tests {
             [Some("g0".into()), Some("g1".into())]
         );
         let s = pair(
-            &b(&["pbmc1.rna.h5", "pbmc2.rna.h5"]),
-            &b(&["pbmc1.atac.h5", "pbmc2.atac.h5"]),
+            &b(&["s1.rna.h5", "s2.rna.h5"]),
+            &b(&["s1.atac.h5", "s2.atac.h5"]),
         )
         .unwrap();
-        assert_eq!(&*s[1].cell("AC"), "AC@pbmc2");
+        assert_eq!(&*s[1].cell("AC"), "AC@s2");
     }
 
     #[test]
     fn files_pair_by_the_words_of_their_names() {
         let p = pair_by_name(
-            &["GSM2_pbmc_b_gex.h5", "GSM1_pbmc_a_gex.h5"],
-            &["GSM3_pbmc_a_atac.h5", "GSM4_pbmc_b_atac.h5"],
+            &["X2_s_b_gex.h5", "X1_s_a_gex.h5"],
+            &["X3_s_a_atac.h5", "X4_s_b_atac.h5"],
         );
         assert_eq!(p, [(Some(0), Some(1)), (Some(1), Some(0))]);
         let p = pair_by_name(&["x.h5", "y.h5"], &["u.h5"]);
         assert_eq!(p, [(Some(0), Some(0)), (Some(1), None)]);
-        assert_eq!(holds_by_name("d/pbmc1_GEX.h5"), Some(Holds::Rna));
-        assert_eq!(holds_by_name("pbmc1.atac.zarr.zip"), Some(Holds::Atac));
+        assert_eq!(holds_by_name("d/s1_GEX.h5"), Some(Holds::Rna));
+        assert_eq!(holds_by_name("s1.atac.zarr.zip"), Some(Holds::Atac));
         assert_eq!(holds_by_name("filtered_feature_bc_matrix.h5"), None);
     }
 

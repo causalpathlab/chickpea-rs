@@ -14,7 +14,6 @@ pub mod worker;
 
 use crate::p2g::{PeakToGeneArgs, RegroupArgs};
 use clap::{Args, FromArgMatches};
-use data::Side;
 use std::path::PathBuf;
 
 /// A step `chickpea run` sets up: its subcommand and what it writes.
@@ -29,9 +28,9 @@ pub struct Step {
     pub outputs: fn(&clap::ArgMatches) -> anyhow::Result<Vec<PathBuf>>,
     /// The flags (long names) listed first: what the step reads and writes.
     pub inputs: &'static [&'static str],
-    /// The count files each sample has, set on the data pane rather than
-    /// as flags.
-    pub data: &'static [Side],
+    /// Whether it reads each sample's RNA and ATAC, set on the data pane
+    /// rather than as flags.
+    pub data: bool,
 }
 
 /// The steps, in the order the screen offers them.
@@ -50,7 +49,7 @@ pub const STEPS: &[Step] = &[
             Ok(args.outputs())
         },
         inputs: &["gene-coords", "gff-file", "batch", "groups", "out"],
-        data: &[Side::Rna, Side::Atac],
+        data: true,
     },
     Step {
         name: "regroup",
@@ -62,7 +61,7 @@ pub const STEPS: &[Step] = &[
         },
         outputs: |m| Ok(RegroupArgs::from_arg_matches(m)?.outputs()),
         inputs: &["run", "groups", "atac", "out"],
-        data: &[],
+        data: false,
     },
 ];
 

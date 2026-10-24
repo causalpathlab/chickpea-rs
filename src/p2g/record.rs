@@ -4,14 +4,16 @@
 //! them), the groups and the flags.
 //!
 //! `regroup` reads each sample's ATAC from it; an `--atac` given there
-//! stands in for the recorded file of the sample its name names.
+//! stands in for the recorded file of the sample its name names. Its own
+//! record (`{out}.regroup.json`) keeps the samples as it read them, so a
+//! regrouped run regroups again without being told those files again.
 //!
 //! A recorded file is looked for where it was first, and only then near the
 //! record: a record copied into another tree must not quietly read that
 //! tree's data while its own is still there.
 
 use crate::p2g::samples::{words, Sample};
-use crate::p2g::workflow::tidy;
+use crate::p2g::workflow::{regroup_record, tidy};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
@@ -86,6 +88,25 @@ pub fn write_json(path: &str, v: &Value) -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("writing {path}: {e}"))
 }
 
+/// `samples` as a record in `dir` keeps them: each one's name, and its
+/// files [`recorded`] (a file not known, as in a regroup of a run from
+/// before records, as null).
+#[must_use]
+pub fn samples_json(samples: &[Sample], dir: &Path) -> Value {
+    let file = |p: &str| (!p.is_empty()).then(|| recorded(p, dir));
+    samples
+        .iter()
+        .map(|s| {
+            let (rna, atac) = (file(&s.rna), file(&s.atac));
+            json!({
+                "name": s.name.as_deref(),
+                "rna": rna.as_ref().map(|f| &f.0), "rna_abs": rna.as_ref().map(|f| &f.1),
+                "atac": atac.as_ref().map(|f| &f.0), "atac_abs": atac.as_ref().map(|f| &f.1),
+            })
+        })
+        .collect()
+}
+
 /// Write `out`'s run record: `samples`, `groups` and `flags`.
 pub fn write_run_record(
     out: &str,
@@ -95,21 +116,9 @@ pub fn write_run_record(
 ) -> anyhow::Result<()> {
     let record = run_record(out);
     let dir = folder(&record);
-    let file = |p: &str| recorded(p, dir);
-    let samples: Vec<Value> = samples
-        .iter()
-        .map(|s| {
-            let ((rna, rna_abs), (atac, atac_abs)) = (file(&s.rna), file(&s.atac));
-            json!({
-                "name": s.name.as_deref(),
-                "rna": rna, "rna_abs": rna_abs,
-                "atac": atac, "atac_abs": atac_abs,
-            })
-        })
-        .collect();
-    let groups = groups.map(file);
+    let groups = groups.map(|g| recorded(g, dir));
     let v = json!({
-        "samples": samples,
+        "samples": samples_json(samples, dir),
         "groups": groups.as_ref().map(|g| &g.0),
         "groups_abs": groups.as_ref().map(|g| &g.1),
         "flags": flags,
@@ -117,37 +126,54 @@ pub fn write_run_record(
     write_json(&record, &v)
 }
 
-/// The samples `prefix`'s run record names, their files found; `None` for
-/// a run written before records.
-pub fn read_samples(prefix: &str) -> anyhow::Result<Option<Vec<Sample>>> {
-    let record = run_record(prefix);
+/// The samples run `prefix` (trained at `trained`) read, their files
+/// found: for a regrouped run, as its regroup record keeps them, else as
+/// the trained run's record does; `None` for a run from before records.
+pub fn read_samples(prefix: &str, trained: &str) -> anyhow::Result<Option<Vec<Sample>>> {
+    let regroup = regroup_record(prefix);
+    if prefix != trained && Path::new(&regroup).exists() {
+        let v = read_json(&regroup)?;
+        // A regroup record from before it kept them: the trained run's.
+        if v.get("samples").is_some() {
+            return samples_in(&v, &regroup, false).map(Some);
+        }
+    }
+    let record = run_record(trained);
     if !Path::new(&record).exists() {
         return Ok(None);
     }
-    let v = read_json(&record)?;
-    let dir = folder(&record);
+    samples_in(&read_json(&record)?, &record, true).map(Some)
+}
+
+/// The samples in `v`, read from `record`; a sample's RNA may be null
+/// unless `need_rna` (a regroup of a run from before records never knew
+/// it).
+fn samples_in(v: &Value, record: &str, need_rna: bool) -> anyhow::Result<Vec<Sample>> {
+    let dir = folder(record);
     let list = v["samples"]
         .as_array()
         .filter(|l| !l.is_empty())
         .ok_or_else(|| anyhow::anyhow!("{record} names no samples"))?;
-    let samples = list
-        .iter()
+    list.iter()
         .map(|s| {
-            let at = |side: &str| -> anyhow::Result<Box<str>> {
-                let rel = s[side]
-                    .as_str()
-                    .ok_or_else(|| anyhow::anyhow!("{record}: a sample without its {side}"))?;
+            let at = |side: &str| -> Option<Box<str>> {
+                let rel = s[side].as_str()?;
                 let abs = s[format!("{side}_abs")].as_str();
-                Ok(located(dir, rel, abs, |p| Path::new(p).exists()).into())
+                Some(located(dir, rel, abs, |p| Path::new(p).exists()).into())
+            };
+            let without = |side: &str| anyhow::anyhow!("{record}: a sample without its {side}");
+            let rna = match at("rna") {
+                Some(rna) => rna,
+                None if need_rna => return Err(without("rna")),
+                None => "".into(),
             };
             Ok(Sample {
                 name: s["name"].as_str().map(Into::into),
-                rna: at("rna")?,
-                atac: at("atac")?,
+                rna,
+                atac: at("atac").ok_or_else(|| without("atac"))?,
             })
         })
-        .collect::<anyhow::Result<_>>()?;
-    Ok(Some(samples))
+        .collect()
 }
 
 /// `samples` with each of `atac` in place of the ATAC of the sample it
@@ -259,24 +285,26 @@ mod tests {
         std::fs::create_dir_all(at("runs")).unwrap();
         let s = [sample(None, &at("d/r.zarr"), &at("d/a.zarr"))];
         write_run_record(&out, &s, None, json!({})).unwrap();
-        let read = read_samples(&out).unwrap().unwrap();
+        let read = read_samples(&out, &out).unwrap().unwrap();
         assert_eq!(read[0].atac, s[0].atac);
 
         // The record moved alone: the files are where they were.
         std::fs::create_dir_all(at("far/away")).unwrap();
         std::fs::copy(run_record(&out), run_record(&at("far/away/p2g"))).unwrap();
-        let read = read_samples(&at("far/away/p2g")).unwrap().unwrap();
+        let far = at("far/away/p2g");
+        let read = read_samples(&far, &far).unwrap().unwrap();
         assert_eq!(read[0].atac, s[0].atac);
 
         // The record and its files moved together: they are near it.
         let moved = dir.path().with_extension("moved");
         std::fs::rename(dir.path(), &moved).unwrap();
-        let read = read_samples(&moved.join("runs/p2g").to_string_lossy())
-            .unwrap()
-            .unwrap();
+        let near = moved.join("runs/p2g").to_string_lossy().into_owned();
+        let read = read_samples(&near, &near).unwrap().unwrap();
         assert_eq!(Path::new(&*read[0].atac), moved.join("d/a.zarr"));
         std::fs::remove_dir_all(moved).unwrap();
-        assert!(read_samples("no/such/run").unwrap().is_none());
+        assert!(read_samples("no/such/run", "no/such/run")
+            .unwrap()
+            .is_none());
     }
 
     #[test]

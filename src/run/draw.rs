@@ -3,6 +3,7 @@
 //! browser over them when it is open.
 
 use super::app::{App, Drawn, Pane};
+use super::data::SIDES;
 use super::worker::Ended;
 use crate::tui::{key_line, ListHit, RUN_KEY};
 use legume_tui::browse::first_visible;
@@ -47,7 +48,10 @@ fn tabs(f: &mut Frame, app: &App, area: Rect, look: &Look, drawn: &mut Drawn) {
     let mut spans = vec![Span::styled(title, look.bold)];
     for pane in app.panes() {
         let name = match pane {
-            Pane::Data => format!(" data ({}) ", app.data.pairs.len()),
+            Pane::Data => format!(
+                " data ({}) ",
+                app.data.as_ref().map_or(0, |d| d.pairs.len())
+            ),
             Pane::Form => format!(" flags ({} changed) ", app.form.changed()),
             Pane::Run => " run ".to_string(),
         };
@@ -69,7 +73,7 @@ fn tabs(f: &mut Frame, app: &App, area: Rect, look: &Look, drawn: &mut Drawn) {
 /// The count files: a row per sample, its name and each side's file.
 fn data(f: &mut Frame, app: &App, area: Rect, look: &Look, drawn: &mut Drawn) {
     let [rows, help] = Layout::vertical([Constraint::Min(3), Constraint::Length(3)]).areas(area);
-    let d = &app.data;
+    let Some(d) = &app.data else { return };
     // Files of one folder by name, the folder in the title.
     let mut folders = d
         .pairs
@@ -101,7 +105,7 @@ fn data(f: &mut Frame, app: &App, area: Rect, look: &Look, drawn: &mut Drawn) {
         .max(6)
         + 2;
     let lead = 4 + name_w as u16;
-    let n_sides = d.sides.len() as u16;
+    let n_sides = SIDES.len() as u16;
     let col_w = inner.width.saturating_sub(lead) / n_sides.max(1);
     drawn.cols = (0..n_sides).map(|k| inner.x + lead + k * col_w).collect();
     // A head line, then the rows.
@@ -110,7 +114,7 @@ fn data(f: &mut Frame, app: &App, area: Rect, look: &Look, drawn: &mut Drawn) {
         format!("{:<w$}", "  # sample", w = lead as usize),
         look.hint,
     )];
-    for s in d.sides {
+    for s in SIDES {
         head.push(Span::styled(
             format!("{:<w$}", s.title(), w = col_w as usize),
             look.hint,
@@ -144,7 +148,7 @@ fn data(f: &mut Frame, app: &App, area: Rect, look: &Look, drawn: &mut Drawn) {
                 Span::raw(format!("{:<2}", i + 1)),
                 Span::raw(format!("{name:<name_w$}")),
             ];
-            for (c, &side) in d.sides.iter().enumerate() {
+            for (c, side) in SIDES.into_iter().enumerate() {
                 let w = col_w.saturating_sub(1) as usize;
                 let (text, style) = match p.get(side) {
                     Some(path) => (cut(path, w), look.page),

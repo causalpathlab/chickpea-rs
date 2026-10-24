@@ -99,8 +99,9 @@ enum Commands {
                       {run}.links.parquet) and the peaks' accessibility in its cells,\n\
                       so the run is not trained again: a lupin round's cell types\n\
                       take the place of the Leiden clusters in minutes. Each sample's\n\
-                      ATAC is the file the run's record ({run}.run.json) names;\n\
-                      --atac gives one that has moved.\n\
+                      ATAC is the file the run's record ({run}.run.json, or a\n\
+                      regrouped run's {run}.regroup.json) names; --atac gives one\n\
+                      that has moved.\n\
                       \n\
                       Writes {out}.groups, cell_clusters, peak_rates and\n\
                       links_by_cluster, and {out}.regroup.json, which names the run\n\

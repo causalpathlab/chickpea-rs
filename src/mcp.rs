@@ -521,7 +521,7 @@ fn specs() -> Vec<ToolSpec> {
             json!({
                 "type": "object",
                 "properties": {
-                    "data": paths("Count files in any order, in place of rna and atac: each told RNA, ATAC or both (genes and peaks as rows of one file, a 10x multiome matrix) by its rows; RNA and ATAC files paired by the words of their names (pbmc1_gex.h5 with pbmc1_atac.h5), else in the order given"),
+                    "data": paths("Count files in any order, in place of rna and atac: each told RNA, ATAC or both (genes and peaks as rows of one file, a 10x multiome matrix) by its rows; RNA and ATAC files paired by the words of their names (s1_gex.h5 with s1_atac.h5), else in the order given"),
                     "rna": paths("RNA gene counts (.zarr, .zarr.zip, .h5), one file per sample (a list, or a path for one sample); with several, cells are {barcode}@{sample}, the sample named after its files"),
                     "atac": paths("ATAC peak counts for the same barcodes, one file per sample in rna's order; peaks named chr:start-end"),
                     "gene_coords": path("Gene TSS table: gene, chr, tss, with a header (this or gff_file)"),
@@ -549,7 +549,7 @@ fn specs() -> Vec<ToolSpec> {
                 "type": "object",
                 "properties": {
                     "run": path("The finished run's out prefix, or one of its tables"),
-                    "atac": paths("ATAC peak counts in place of the files the run's record ({run}.run.json) names, for a sample whose file has moved: each stands in for the sample its file name names (a list, or a path). A run without a record needs every sample's, in peak-to-gene's order"),
+                    "atac": paths("ATAC peak counts in place of the files the run's record ({run}.run.json, or a regrouped run's {run}.regroup.json) names, for a sample whose file has moved: each stands in for the sample its file name names (a list, or a path). A run without a record needs every sample's, in peak-to-gene's order"),
                     "groups": path("The new groups: a lupin round's manifest (.json, read for annotate.argmax), its argmax table, or a cell, group table"),
                     "out": path("Output prefix for the regrouped run [default: results/<today>/regroup.{groups' name}]"),
                     "background": {"type": "boolean", "description": "Run as a background job and return at once [default: false]"},

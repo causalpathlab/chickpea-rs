@@ -1,9 +1,9 @@
 //! The data pane: a step's count files, one row per sample (its RNA and its
 //! ATAC, for peak-to-gene), set apart from the other flags as senna's data
-//! screen is; a step without count files (regroup) has none. Files are added from the browser,
-//! several at once: each is told RNA or ATAC by its name (or, failing
-//! that, by whether its rows are peaks) and paired by the words of the
-//! names.
+//! screen is; a step without count files (regroup) has none. Files are
+//! added from the browser, several at once: each is told RNA or ATAC by
+//! its name (or, failing that, by whether its rows are peaks) and paired by
+//! the words of the names.
 
 use crate::p2g::samples::{self, Holds};
 use legume_tui::form::{emit, Many};
@@ -47,38 +47,24 @@ impl Pair {
     }
 }
 
+/// A sample's files, in column order.
+pub const SIDES: [Side; 2] = [Side::Rna, Side::Atac];
+
 /// The samples, and the cell under the cursor.
+#[derive(Default)]
 pub struct Data {
-    /// The files a sample has, in column order.
-    pub sides: &'static [Side],
     pub pairs: Vec<Pair>,
     /// The row under the cursor; `pairs.len()` is the "add" row.
     pub at: usize,
-    /// The column under the cursor, into `sides`; kept in range by its
+    /// The column under the cursor, into [`SIDES`]; kept in range by its
     /// writers.
     pub col: usize,
 }
 
 impl Data {
-    #[must_use]
-    pub fn new(sides: &'static [Side]) -> Self {
-        Self {
-            sides,
-            pairs: Vec::new(),
-            at: 0,
-            col: 0,
-        }
-    }
-
-    /// Whether the step has count files, so a data pane.
-    #[must_use]
-    pub fn shown(&self) -> bool {
-        !self.sides.is_empty()
-    }
-
     /// The rows given as flags: `--rna a b --atac c d` read back.
     pub fn prefill(&mut self, values: impl Fn(Side) -> Vec<String>) {
-        let lists: Vec<(Side, Vec<String>)> = self.sides.iter().map(|&s| (s, values(s))).collect();
+        let lists: Vec<(Side, Vec<String>)> = SIDES.iter().map(|&s| (s, values(s))).collect();
         let n = lists.iter().map(|(_, l)| l.len()).max().unwrap_or(0);
         self.pairs = (0..n)
             .map(|i| {
@@ -94,13 +80,13 @@ impl Data {
     /// The side under the cursor.
     #[must_use]
     pub fn side(&self) -> Side {
-        self.sides[self.col]
+        SIDES[self.col]
     }
 
     /// The flags the rows stand for, each side's files in row order.
     #[must_use]
     pub fn argv(&self) -> Vec<String> {
-        self.sides
+        SIDES
             .iter()
             .flat_map(|&s| {
                 let vs: Vec<String> = self
@@ -117,15 +103,12 @@ impl Data {
     /// Why the rows cannot run yet: no files, or a sample without one.
     #[must_use]
     pub fn problem(&self) -> Option<String> {
-        if !self.shown() {
-            return None;
-        }
         if self.pairs.is_empty() {
-            let what: Vec<&str> = self.sides.iter().map(|s| s.title()).collect();
+            let what: Vec<&str> = SIDES.iter().map(|s| s.title()).collect();
             return Some(format!("add the {} files (a)", what.join(" and ")));
         }
         self.pairs.iter().enumerate().find_map(|(i, p)| {
-            let missing = self.sides.iter().find(|&&s| p.get(s).is_none())?;
+            let missing = SIDES.iter().find(|&&s| p.get(s).is_none())?;
             Some(format!("sample {} has no {} file", i + 1, missing.title()))
         })
     }
@@ -188,7 +171,7 @@ impl Data {
         let [n_rna, n_atac] = [pools[0].len(), pools[1].len()];
         // Rows short of a side take the file of it named most alike.
         for p in &mut self.pairs {
-            for &side in self.sides {
+            for side in SIDES {
                 let (k, other) = (side as usize, 1 - side as usize);
                 let (None, Some(o)) = (&p.0[k], &p.0[other]) else {
                     continue;
@@ -239,21 +222,18 @@ mod tests {
 
     #[test]
     fn files_are_sorted_and_paired_by_name() {
-        let mut d = Data::new(&[Side::Rna, Side::Atac]);
+        let mut d = Data::default();
         d.add(vec![
-            p("pbmc2.atac.zarr.zip"),
-            p("pbmc1.rna.zarr.zip"),
-            p("pbmc1.atac.zarr.zip"),
-            p("pbmc2.gex.h5"),
+            p("s2.atac.zarr.zip"),
+            p("s1.rna.zarr.zip"),
+            p("s1.atac.zarr.zip"),
+            p("s2.gex.h5"),
         ]);
         assert_eq!(
             d.pairs,
             [
-                Pair([
-                    Some(p("pbmc1.rna.zarr.zip")),
-                    Some(p("pbmc1.atac.zarr.zip"))
-                ]),
-                Pair([Some(p("pbmc2.gex.h5")), Some(p("pbmc2.atac.zarr.zip"))]),
+                Pair([Some(p("s1.rna.zarr.zip")), Some(p("s1.atac.zarr.zip"))]),
+                Pair([Some(p("s2.gex.h5")), Some(p("s2.atac.zarr.zip"))]),
             ]
         );
         assert_eq!(d.problem(), None);
@@ -261,46 +241,37 @@ mod tests {
             d.argv(),
             [
                 "--rna",
-                "pbmc1.rna.zarr.zip",
-                "pbmc2.gex.h5",
+                "s1.rna.zarr.zip",
+                "s2.gex.h5",
                 "--atac",
-                "pbmc1.atac.zarr.zip",
-                "pbmc2.atac.zarr.zip"
+                "s1.atac.zarr.zip",
+                "s2.atac.zarr.zip"
             ]
         );
-        assert_eq!(
-            d.names(),
-            [Some("pbmc1".to_string()), Some("pbmc2".to_string())]
-        );
+        assert_eq!(d.names(), [Some("s1".to_string()), Some("s2".to_string())]);
     }
 
     #[test]
     fn a_file_of_both_is_a_sample_by_itself() {
-        let mut d = Data::new(&[Side::Rna, Side::Atac]);
+        let mut d = Data::default();
         d.add(vec![
-            p("GSM2_donorB_gex.h5"),
-            p("donorA_multiome.h5"),
-            p("GSM9_donorB_atac.h5"),
+            p("X2_dB_gex.h5"),
+            p("dA_multiome.h5"),
+            p("X9_dB_atac.h5"),
         ]);
         assert_eq!(
             d.pairs,
             [
-                Pair([Some(p("donorA_multiome.h5")), Some(p("donorA_multiome.h5"))]),
-                Pair([
-                    Some(p("GSM2_donorB_gex.h5")),
-                    Some(p("GSM9_donorB_atac.h5"))
-                ]),
+                Pair([Some(p("dA_multiome.h5")), Some(p("dA_multiome.h5"))]),
+                Pair([Some(p("X2_dB_gex.h5")), Some(p("X9_dB_atac.h5"))]),
             ]
         );
-        assert_eq!(
-            d.names(),
-            [Some("donorA_multiome".into()), Some("donorB".into())]
-        );
+        assert_eq!(d.names(), [Some("dA_multiome".into()), Some("dB".into())]);
     }
 
     #[test]
     fn a_missing_side_is_filled_by_the_next_files() {
-        let mut d = Data::new(&[Side::Rna, Side::Atac]);
+        let mut d = Data::default();
         d.add(vec![p("s1_rna.h5")]);
         assert!(d.problem().unwrap().contains("no ATAC"));
         d.add(vec![p("s1_atac.h5")]);

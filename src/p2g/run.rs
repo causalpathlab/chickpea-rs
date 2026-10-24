@@ -12,7 +12,7 @@ use data_beans::sparse_io::open_sparse_matrix_by_path;
 use genomic_data::coordinates::load_gene_tss;
 use rustc_hash::FxHashSet;
 
-#[derive(Args, Debug)]
+#[derive(Args, Debug, serde::Serialize)]
 #[command(group = clap::ArgGroup::new("positions")
     .required(true)
     .args(["gene_coords", "gff_file"]))]
@@ -31,9 +31,10 @@ pub struct PeakToGeneArgs {
                      Each is told RNA, ATAC, or both (genes and peaks as rows of one\n\
                      file, a 10x multiome matrix say) by its rows, a peak being named\n\
                      chr:start-end. A file of both is a sample by itself; RNA and ATAC\n\
-                     files are paired by the words of their names (pbmc1_gex.h5 with\n\
-                     pbmc1_atac.h5), else in the order given."
+                     files are paired by the words of their names (s1_gex.h5 with\n\
+                     s1_atac.h5), else in the order given."
     )]
+    #[serde(skip)]
     data: Vec<Box<str>>,
 
     #[arg(
@@ -46,6 +47,7 @@ pub struct PeakToGeneArgs {
                      named after its files, and each sample is a batch. A file of\n\
                      genes and peaks together can be given as both --rna and --atac."
     )]
+    #[serde(skip)]
     rna: Vec<Box<str>>,
 
     #[arg(
@@ -54,6 +56,7 @@ pub struct PeakToGeneArgs {
         requires = "rna",
         help = "ATAC peak counts (zarr/h5) for the same barcodes, one file per sample in --rna's order"
     )]
+    #[serde(skip)]
     atac: Vec<Box<str>>,
 
     #[arg(
@@ -188,9 +191,11 @@ pub struct PeakToGeneArgs {
     module_only_min_rows: usize,
 
     #[arg(long, default_value_t = ComputeDevice::Cpu, value_enum, help = "Compute device")]
+    #[serde(skip)]
     device: ComputeDevice,
 
     #[arg(long, default_value_t = 0, help = "Device index (CUDA/Metal)")]
+    #[serde(skip)]
     device_no: usize,
 
     /* Clusters, seed, output */
@@ -213,43 +218,29 @@ pub struct PeakToGeneArgs {
                      by its barcode before '@'. `chickpea regroup` redoes the\n\
                      groups of a finished run without training it again."
     )]
+    #[serde(skip)]
     groups: Option<Box<str>>,
 
     #[arg(long, default_value_t = 42, help = "Random seed")]
     seed: u64,
 
     #[arg(long, short, help = "Output prefix for {out}.*.parquet")]
+    #[serde(skip)]
     out: Box<str>,
 }
 
 impl PeakToGeneArgs {
     /// The flags the run's record keeps: those that shape what it trains,
-    /// its gene positions and batches as given.
+    /// its gene positions and batches as given (not its files, device or
+    /// out).
     fn flags(&self) -> serde_json::Value {
-        serde_json::json!({
-            "gene_coords": self.gene_coords.as_deref(),
-            "gff_file": self.gff_file.as_deref(),
-            "batch": self.batch.as_deref(),
-            "qc": self.qc.to_config().is_some(),
-            "cis_window": self.cis_window,
-            "max_cis": self.max_cis,
-            "contact_gamma": self.contact_gamma,
-            "contact_pseudocount": self.contact_pseudocount,
-            "align_weight": self.align_weight,
-            "mix": self.mix,
-            "embedding_dim": self.embedding_dim,
-            "epochs": self.epochs,
-            "num_levels": self.num_levels,
-            "sort_dim": self.sort_dim,
-            "proj_dim": self.proj_dim,
-            "weight_decay": self.weight_decay,
-            "feature_modules": self.feature_modules,
-            "peak_modules": self.peak_modules,
-            "phase1_cells_per_pb": self.phase1_cells_per_pb,
-            "module_only_min_rows": self.module_only_min_rows,
-            "n_clusters": self.n_clusters,
-            "seed": self.seed,
-        })
+        let mut v = serde_json::to_value(self).expect("plain fields");
+        if let Some(qc) = v["qc"].as_object_mut() {
+            // Where its reports go, not which cells are kept.
+            qc.remove("qc_report");
+            qc.remove("qc_histogram");
+        }
+        v
     }
 
     /// The samples: `--data` told apart and paired by reading the files'
@@ -422,4 +413,65 @@ fn append(report: &mut QcReport, more: QcReport) {
         }
     }
     report.n_cells_dropped += more.n_cells_dropped;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::FromArgMatches;
+
+    #[test]
+    fn the_record_keeps_every_flag_but_the_files_device_and_reports() {
+        let cmd = PeakToGeneArgs::augment_args(clap::Command::new("p2g"));
+        let m = cmd
+            .clone()
+            .try_get_matches_from([
+                "p2g",
+                "--rna",
+                "r",
+                "--atac",
+                "a",
+                "--gene-coords",
+                "g",
+                "-o",
+                "o",
+            ])
+            .unwrap();
+        let flags = PeakToGeneArgs::from_arg_matches(&m).unwrap().flags();
+        let not = [
+            "data",
+            "rna",
+            "atac",
+            "groups",
+            "out",
+            "device",
+            "device-no",
+            "qc-report",
+            "qc-histogram",
+            "help",
+        ];
+        // Each kept as its own value, the default clap gave it.
+        let same = |raw: Option<&str>, v: &serde_json::Value| match (raw, v) {
+            (None, serde_json::Value::Null) => true,
+            (Some(r), serde_json::Value::String(s)) => r == s,
+            (Some(r), serde_json::Value::Bool(b)) => r.parse() == Ok(*b),
+            (Some(r), serde_json::Value::Number(n)) => r
+                .parse::<f64>()
+                .is_ok_and(|x| (x - n.as_f64().unwrap()).abs() <= 1e-6 * x.abs().max(1.0)),
+            _ => false,
+        };
+        for arg in cmd.get_arguments() {
+            let Some(long) = arg.get_long() else { continue };
+            let key = long.replace('-', "_");
+            let kept = flags.get(&key).or_else(|| flags["qc"].get(&key));
+            assert_eq!(kept.is_some(), !not.contains(&long), "--{long}");
+            if let Some(v) = kept {
+                let raw = m
+                    .get_raw(arg.get_id().as_str())
+                    .and_then(|mut r| r.next())
+                    .and_then(|r| r.to_str());
+                assert!(same(raw, v), "--{long}: {raw:?} kept as {v}");
+            }
+        }
+    }
 }

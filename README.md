@@ -121,8 +121,9 @@ redoes a finished run's per-group tables for other cell groups (a lupin
 round's cell types, say) without training again, and writes
 `{out}.regroup.json` naming the run whose links it uses. It reads each
 sample's ATAC from the run's record, `{out}.run.json` (the samples' files,
-groups and flags, relative to the record and in full); `--atac` gives a
-file that has moved, matched to its sample by name.
+groups and flags, relative to the record and in full), or for a regrouped
+run, from its `{out}.regroup.json`, which keeps the samples as it read
+them; `--atac` gives a file that has moved, matched to its sample by name.
 
 `chickpea run` sets up a step on a terminal screen and runs it with its log
 on screen: the count files on a data pane, a row per sample, picked in a file

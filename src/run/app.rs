@@ -1,7 +1,7 @@
 //! The run screen's state and keys: a step's count files (the data pane)
 //! and its other flags as a form, then its run.
 
-use super::data::Data;
+use super::data::{Data, SIDES};
 use super::pick::{file_flags, Outcome, Pick, Want};
 use super::worker::{Ended, Job};
 use super::{checked, Step, STEPS};
@@ -43,7 +43,8 @@ pub struct Drawn {
 /// The screen.
 pub struct App {
     pub step: &'static Step,
-    pub data: Data,
+    /// The data pane, for a step with count files.
+    pub data: Option<Data>,
     pub form: Form,
     /// The form's flags that name a file to read: enter browses for one.
     pub files: Vec<String>,
@@ -87,15 +88,18 @@ impl App {
             form.prefill(m);
         }
         // The count files are the data pane's, not rows of the form.
-        let mut data = Data::new(step.data);
-        data.prefill(|side| {
-            m.as_ref()
-                .and_then(|m| legume_tui::form::given_words(m, side.long()))
-                .unwrap_or_default()
+        let data = step.data.then(|| {
+            let mut data = Data::default();
+            data.prefill(|side| {
+                m.as_ref()
+                    .and_then(|m| legume_tui::form::given_words(m, side.long()))
+                    .unwrap_or_default()
+            });
+            form.fields
+                .retain(|f| !SIDES.iter().any(|s| s.long() == f.long));
+            data
         });
-        form.fields
-            .retain(|f| !step.data.iter().any(|s| s.long() == f.long));
-        let pane = if data.shown() && data.pairs.is_empty() {
+        let pane = if data.as_ref().is_some_and(|d| d.pairs.is_empty()) {
             Pane::Data
         } else {
             Pane::Form
@@ -125,8 +129,8 @@ impl App {
     #[must_use]
     pub fn argv(&self) -> Vec<String> {
         self.data
-            .argv()
-            .into_iter()
+            .iter()
+            .flat_map(Data::argv)
             .chain(self.form.argv())
             .collect()
     }
@@ -140,7 +144,7 @@ impl App {
     }
 
     fn recheck(&mut self) {
-        self.check = match self.data.problem() {
+        self.check = match self.data.as_ref().and_then(Data::problem) {
             Some(why) => Err(why),
             None => checked(self.step, &self.argv()),
         };
@@ -179,7 +183,7 @@ impl App {
     /// The panes Tab goes through.
     pub(super) fn panes(&self) -> Vec<Pane> {
         let mut v = Vec::with_capacity(3);
-        if self.data.shown() {
+        if self.data.is_some() {
             v.push(Pane::Data);
         }
         v.push(Pane::Form);
@@ -206,10 +210,10 @@ impl App {
             self.browse_dir = dir.to_path_buf();
         }
         match want {
-            Want::Data => self.note = Some(self.data.add(files)),
+            Want::Data => self.note = self.data.as_mut().map(|d| d.add(files)),
             Want::Cell => {
-                if let Some(f) = files.into_iter().next() {
-                    self.data.set(f);
+                if let (Some(d), Some(f)) = (self.data.as_mut(), files.into_iter().next()) {
+                    d.set(f);
                 }
             }
             Want::Flag { long, .. } => {
@@ -285,26 +289,25 @@ impl App {
     }
 
     fn data_key(&mut self, k: KeyEvent) {
-        let n = self.data.pairs.len();
+        if matches!(k.code, KeyCode::Char('q') | KeyCode::Esc) {
+            return self.quit_key();
+        }
+        let Some(d) = self.data.as_mut() else { return };
+        let n = d.pairs.len();
         match k.code {
-            KeyCode::Char('q') | KeyCode::Esc => self.quit_key(),
-            KeyCode::Down | KeyCode::Char('j') => self.data.at = (self.data.at + 1).min(n),
-            KeyCode::Up | KeyCode::Char('k') => self.data.at = self.data.at.saturating_sub(1),
-            KeyCode::Left | KeyCode::Char('h') => self.data.col = self.data.col.saturating_sub(1),
-            KeyCode::Right | KeyCode::Char('l') => {
-                self.data.col = (self.data.col + 1).min(self.data.sides.len() - 1);
-            }
+            KeyCode::Down | KeyCode::Char('j') => d.at = (d.at + 1).min(n),
+            KeyCode::Up | KeyCode::Char('k') => d.at = d.at.saturating_sub(1),
+            KeyCode::Left | KeyCode::Char('h') => d.col = d.col.saturating_sub(1),
+            KeyCode::Right | KeyCode::Char('l') => d.col = (d.col + 1).min(SIDES.len() - 1),
             KeyCode::Char('a') | KeyCode::Char('+') => self.browse(Want::Data, None),
-            KeyCode::Enter | KeyCode::Char(' ') if self.data.at >= n => {
-                self.browse(Want::Data, None);
-            }
+            KeyCode::Enter | KeyCode::Char(' ') if d.at >= n => self.browse(Want::Data, None),
             KeyCode::Enter | KeyCode::Char(' ') => {
-                let at = self.data.pairs[self.data.at].get(self.data.side()).cloned();
+                let at = d.pairs[d.at].get(d.side()).cloned();
                 self.browse(Want::Cell, at);
             }
             KeyCode::Char('x') | KeyCode::Delete | KeyCode::Backspace => {
-                self.data.remove();
-                self.data.at = self.data.at.min(self.data.pairs.len());
+                d.remove();
+                d.at = d.at.min(d.pairs.len());
                 self.recheck();
             }
             _ => {}
@@ -419,13 +422,16 @@ impl App {
             return;
         };
         match self.pane {
-            Pane::Data if i <= self.data.pairs.len() => {
+            Pane::Data => {
+                let Some(d) = self.data.as_mut().filter(|d| i <= d.pairs.len()) else {
+                    return;
+                };
                 let col = drawn.cols.iter().rposition(|&x| m.column >= x).unwrap_or(0);
-                if i == self.data.at && (col == self.data.col || i == self.data.pairs.len()) {
+                if i == d.at && (col == d.col || i == d.pairs.len()) {
                     self.data_key(KeyEvent::from(KeyCode::Enter));
                 } else {
-                    self.data.at = i;
-                    self.data.col = col;
+                    d.at = i;
+                    d.col = col;
                 }
             }
             Pane::Form if i < self.form.fields.len() => {
@@ -580,10 +586,10 @@ mod tests {
     fn files_are_added_from_the_browser_and_paired() {
         let dir = tempfile::tempdir().unwrap();
         for f in [
-            "pbmc1.rna.zarr.zip",
-            "pbmc1.atac.zarr.zip",
-            "pbmc2.rna.zarr.zip",
-            "pbmc2.atac.zarr.zip",
+            "s1.rna.zarr.zip",
+            "s1.atac.zarr.zip",
+            "s2.rna.zarr.zip",
+            "s2.atac.zarr.zip",
             "notes.txt",
         ] {
             std::fs::write(dir.path().join(f), "x").unwrap();
@@ -593,7 +599,7 @@ mod tests {
         assert_eq!(app.pane, Pane::Data);
         key(&mut app, KeyCode::Char('a'));
         let shown = screen(&app);
-        assert!(shown.contains("pbmc1.atac.zarr.zip"), "{shown}");
+        assert!(shown.contains("s1.atac.zarr.zip"), "{shown}");
         assert!(!shown.contains("notes.txt"), "{shown}");
         // Mark all four with space; enter takes them.
         for _ in 0..4 {
@@ -601,10 +607,10 @@ mod tests {
         }
         key(&mut app, KeyCode::Enter);
         assert!(app.pick.is_none());
-        assert_eq!(app.data.pairs.len(), 2);
+        assert_eq!(app.data.as_ref().unwrap().pairs.len(), 2);
         let shown = screen(&app);
         println!("{shown}");
-        assert!(shown.contains("pbmc2"), "{shown}");
+        assert!(shown.contains("s2"), "{shown}");
         let argv = app.argv().join(" ");
         assert!(argv.contains("--rna"), "{argv}");
         // A click on a tab opens its pane.
@@ -638,5 +644,18 @@ mod tests {
         assert!(app.form.fields.iter().any(|f| &*f.long == "atac"));
         let shown = screen(&app);
         assert!(!shown.contains(" data ("), "{shown}");
+
+        // Its --atac, given, is its own flag once, not a hidden sample's.
+        let argv: Vec<String> = ["--run", "r", "--atac", "f", "--groups", "g", "-o", "o"]
+            .map(String::from)
+            .into();
+        let app = App::new(super::super::step("regroup").unwrap(), &argv);
+        assert!(app.data.is_none());
+        let argv = app.argv();
+        assert_eq!(
+            argv.iter().filter(|a| *a == "--atac").count(),
+            1,
+            "{argv:?}"
+        );
     }
 }
