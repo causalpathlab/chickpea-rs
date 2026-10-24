@@ -83,7 +83,8 @@ Key options (see `chickpea peak-to-gene --help` for all):
 
 | Flag | Default | Meaning |
 |------|---------|---------|
-| `--rna`, `--atac` | — | paired matrices (zarr/h5) for the same barcodes |
+| `--rna`, `--atac` | — | paired matrices (zarr/h5) for the same barcodes, one file each per sample (paired by position); with several samples a cell is `{barcode}@{sample}` and each sample is a batch |
+| `--data` | — | the count files in any order, in place of `--rna`/`--atac`: each told RNA, ATAC or both (genes and peaks as rows of one file, a 10x multiome matrix) by its rows, and RNA and ATAC files paired by the words of their names |
 | `--batch` | — | batch labels, one per barcode |
 | `--cis-window` | 500000 | max peak-midpoint distance (bp) to a TSS |
 | `--max-cis` | 200 | cap on candidate peaks per gene (nearest) |
@@ -98,17 +99,37 @@ Key options (see `chickpea peak-to-gene --help` for all):
 | `--module-only-min-rows` | 100000 | ATAC goes module-only at this many peaks (0 = off) |
 | `--device`, `--device-no` | cpu, 0 | compute device (`cpu`, `cuda`, `metal`) |
 | `--n-clusters` | Leiden | target number of cell clusters |
+| `--groups` | Leiden | cell groups for the per-group tables: a lupin round (`.json`), its argmax table, or a cell, group table |
 | `-o`, `--out` | — | output prefix |
 
 Outputs, all `{out}.*.parquet`:
 
 | File | Contents |
 |------|----------|
-| `links` | one row per kept cis pair: `gene`, `peak`, `distance`, `abc`, `gate` (the trained `w`; `0` for a closed pair), `corr` (the evidence), `score` (`gate × corr`; rank links by this) |
-| `links_by_cluster` | `gene_idx`, `peak_idx`, `cluster`, `gate`, `abc`: shares within each cell cluster (indices into the RNA / peak axes) |
+| `links` | one row per kept cis pair: `gene`, `peak`, `distance`, `abc`, `gate` (the trained `w`; `0` for a closed pair), `corr` (the evidence), `score` (`gate × corr`; rank links by this), `gene_idx`, `peak_idx` |
+| `links_by_cluster` | `gene_idx`, `peak_idx`, `cluster`, `gate`, `abc`: shares within each cell group (indices into the RNA / peak axes) |
+| `groups`, `peak_rates` | each group's `cluster` number, name and cells; each peak's accessibility in all cells and in each group |
+| `genes` | `gene`, `chromosome`, `tss` |
 | `gene_embedding` | RNA gene rows |
 | `peak_embedding`, `peaks` | each peak's module row; `peak`, `chromosome`, `start`, `end` |
-| `cell_embedding`, `cell_clusters` | per-cell rows; `cell`, `cluster` |
+| `cell_embedding`, `cell_clusters` | per-cell rows; `cell`, `cluster`, `group` |
+
+### Regroup, run and view
+
+`chickpea regroup --run out/p2g --atac atac.zarr --groups lupin/X.L2.json -o out/p2g.L2`
+(each sample's ATAC, in the order peak-to-gene was given them)
+redoes a finished run's per-group tables for other cell groups (a lupin
+round's cell types, say) without training again, and writes
+`{out}.regroup.json` naming the run whose links it uses.
+
+`chickpea run` sets up a step on a terminal screen and runs it with its log
+on screen: the count files on a data pane, a row per sample, picked in a file
+browser (space marks several; each is told RNA, ATAC or both and paired by
+name),
+and the other flags as a form, with the mouse as well as the keys; `chickpea view out/p2g` ranks genes by their links, genome-wide, and
+draws a gene's locus (arcs over each group's accessibility). `--pdf`, `--png`
+and `--text` write either figure without the screen. Both run as detachable
+sessions (`chickpea attach`, `sessions`, `kill`, `rename`).
 
 ### Agents (MCP)
 
@@ -120,6 +141,11 @@ Protocol on stdio:
 | `p2g_flags` | peak-to-gene's flags, read from the command line (help, default, choices) |
 | `p2g_run` | runs peak-to-gene as a child `chickpea`, checked first, as a background job by default (follow it with `job_status` / `job_wait`); never writes over a run |
 | `p2g_links` | a run's links, highest `score` first, for all genes or the ones named |
+| `p2g_regroup` | a finished run's per-group tables for other cell groups, as `chickpea regroup` |
+| `view_open` | opens a run to look at: its genes, peaks and cell groups |
+| `view_genome` | the genes ranked genome-wide, as a figure (PNG or text) and a table |
+| `view_locus` | one gene's locus, as a figure (PNG or text) and its candidates |
+| `view_export` | the locus or genome-wide figure as PDF and/or PNG |
 
 Outputs the agent does not name go to `results/<today>/` under the project (the
 working directory, or `LEGUME_MCP_PROJECT`), beside a driver script that

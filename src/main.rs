@@ -79,9 +79,12 @@ enum Commands {
                       how finely).\n\
                       \n\
                       {out}.links.parquet has gene, peak, distance, abc, gate,\n\
-                      corr and score (gate × corr).\n\
-                      {out}.links_by_cluster.parquet has gene_idx/peak_idx/cluster shares.\n\
-                      Gene, peak and cell embeddings and cell clusters are written too.",
+                      corr and score (gate × corr), and gene_idx and peak_idx.\n\
+                      {out}.links_by_cluster.parquet has each pair's gate and abc\n\
+                      shares in each cell group (Leiden clusters, or --groups).\n\
+                      Gene, peak and cell embeddings and cell clusters are written too.\n\
+                      `chickpea view {out}` looks at them; `chickpea regroup` redoes\n\
+                      the groups.",
         after_long_help = ENV_HELP,
         aliases = ["p2g", "peak2gene"]
     )]
@@ -113,8 +116,9 @@ enum Commands {
         long_about = "Serve chickpea's tools to an agent over the Model Context Protocol.\n\
                       \n\
                       stdin and stdout carry the protocol; logs go to stderr. The tools\n\
-                      list peak-to-gene's flags, run it in the background, and read the\n\
-                      links a run wrote. Outputs, a driver script and a lab notebook are\n\
+                      list peak-to-gene's flags, run it in the background, read the\n\
+                      links a run wrote, regroup a run by other cell groups, and look\n\
+                      at it as `chickpea view` does, figures included. Outputs, a driver script and a lab notebook are\n\
                       kept under the project (the working directory, or\n\
                       LEGUME_MCP_PROJECT).\n\
                       \n\
@@ -128,8 +132,15 @@ enum Commands {
     #[cfg(feature = "tui")]
     #[command(long_about = format!(
         "Set up a chickpea step in the terminal and run it.\n\n\
-         Every flag of the step is a row of the form, with its help; enter\n\
-         changes the row under the cursor, d puts it back to its default.\n\
+         The data pane holds the count files, a row per sample (its RNA and\n\
+         ATAC): a opens a file browser where space marks several files, and\n\
+         each is told RNA, ATAC or both (genes and peaks in one file) and\n\
+         paired with its sample's by name.\n\
+         Tab goes to the flags: each flag of the step is a row of the form,\n\
+         with its help; enter changes the row under the cursor (a file flag\n\
+         opens the browser, e types it), d puts it back to its default.\n\
+         The mouse works too: a click picks a row, a second click changes it,\n\
+         the wheel scrolls, and the tabs at the top switch panes.\n\
          The command line the form stands for is shown at the foot, checked\n\
          as chickpea parses it. ctrl+r runs it, with its log and progress on\n\
          screen; a run is never written over an existing one. x stops it.\n\n\
@@ -153,11 +164,18 @@ enum Commands {
     #[command(long_about = format!(
         "Look at a finished peak-to-gene run's links.\n\n\
          Genes are ranked by their links, one number each (their best link,\n\
-         or how many reach a cutoff), by score, gate, corr or abc; the gene\n\
-         under the cursor shows its cis candidates.\n\n\
+         or how many reach a cutoff), by score, gate, corr or abc, and drawn\n\
+         genome-wide at their TSS; a gene's locus shows its cis candidates,\n\
+         as arcs over each cell group's accessibility. Either figure is\n\
+         written as PDF or PNG (--pdf, --png) or printed as text (--text).\n\
+         On the screen, the wheel moves through the genes over their list and\n\
+         zooms over the figure; a click on a gene goes to it, and a second\n\
+         click to its locus.\n\n\
          Examples:\n\
          \x20 chickpea view out/p2g\n\
-         \x20 chickpea view out/p2g.links.parquet --gene GATA1\n\n\
+         \x20 chickpea view out/p2g.links.parquet --gene GATA1\n\
+         \x20 chickpea view out/p2g --gene GATA1 --pdf gata1.pdf\n\
+         \x20 chickpea view out/p2g --genome --summary count --text 120\n\n\
          {}",
         legume_tui::cli::session_help(
             &chickpea::tui::TOOL,

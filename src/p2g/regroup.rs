@@ -26,14 +26,24 @@ pub const MADE: [&str; 4] = [GROUPS, CELL_CLUSTERS, PEAK_RATES, LINKS_BY_CLUSTER
 
 #[derive(Args, Debug)]
 pub struct RegroupArgs {
-    #[arg(long, help = "The finished run: its out prefix, or one of its tables")]
+    #[arg(
+        long,
+        value_hint = clap::ValueHint::FilePath,
+        help = "The finished run: its out prefix, or one of its tables"
+    )]
     run: Box<str>,
-
-    #[arg(long, help = "The run's ATAC peak counts (zarr/h5)")]
-    atac: Box<str>,
 
     #[arg(
         long,
+        required = true,
+        num_args = 1..,
+        help = "The run's ATAC peak counts (zarr/h5), each sample's file"
+    )]
+    atac: Vec<Box<str>>,
+
+    #[arg(
+        long,
+        value_hint = clap::ValueHint::FilePath,
         help = "The new groups: a lupin round, its argmax table, or a cell, group table",
         long_help = "The new groups: a lupin round's manifest (.json, read for its\n\
                      annotate.argmax), its argmax table, or any table of cell and\n\
@@ -99,8 +109,14 @@ pub fn run_regroup(args: &RegroupArgs) -> anyhow::Result<()> {
     );
 
     let labels = Labels::given(&groups, &cells)?;
-    let (lambda, pooled) =
-        stream_cluster_rates(&args.atac, &peaks, &cells, &labels, args.block_size)?;
+    let tags = crate::p2g::samples::tags_of(&cells, args.atac.len())?;
+    let atac: Vec<(&str, Option<&str>)> = args
+        .atac
+        .iter()
+        .zip(&tags)
+        .map(|(f, t)| (&**f, t.as_deref()))
+        .collect();
+    let (lambda, pooled) = stream_cluster_rates(&atac, &peaks, &cells, &labels, args.block_size)?;
     write_cell_tables(&args.out, &cells, &labels)?;
     write_peak_rates(&table(&args.out, PEAK_RATES), &peaks, &pooled, &lambda)?;
     write_links_by_cluster(&table(&args.out, LINKS_BY_CLUSTER), &pairs, &gate, &lambda)?;
@@ -130,7 +146,7 @@ fn write_record(out: &str, trained: &str, args: &RegroupArgs) -> anyhow::Result<
         "run": rel(trained),
         "run_abs": tidy(&full).to_string_lossy(),
         "groups": rel(&args.groups),
-        "atac": rel(&args.atac),
+        "atac": args.atac.iter().map(|a| rel(a)).collect::<Vec<_>>(),
     });
     std::fs::write(&record, serde_json::to_string_pretty(&v)? + "\n")
         .map_err(|e| anyhow::anyhow!("writing {record}: {e}"))

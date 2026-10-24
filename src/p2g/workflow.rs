@@ -30,6 +30,7 @@ use super::context::for_each_context_share;
 use super::groups::Groups;
 use super::two_track::{embed_two_track, TwoTrackConfig, TwoTrackEmbedding, TwoTrackInput};
 use crate::common::*;
+use crate::p2g::samples::cell;
 use data_beans::sparse_io::open_sparse_matrix_by_path;
 use genomic_data::coordinates::parse_peak_coordinates;
 use graph_embedding_util as ge;
@@ -244,7 +245,11 @@ pub fn run_links(
     let n_clusters = labels.names.len();
 
     let (lambda, pooled) = stream_cluster_rates(
-        input.atac_file,
+        &input
+            .samples
+            .iter()
+            .map(|s| (&*s.atac, s.name.as_deref()))
+            .collect::<Vec<_>>(),
         &emb.peak_names,
         &barcodes,
         &labels,
@@ -350,72 +355,63 @@ impl Labels {
 
 /// Each peak's accessibility (its reads over the cells' reads) in each
 /// group of `cells` (`labels.of`, in their order) and in all of `cells`,
-/// reading the ATAC counts `block` cells at a time. `peaks` are the ATAC
-/// rows, in order.
+/// reading each sample's ATAC counts (its file, and the `@` tag of its
+/// cells) `block` cells at a time. `peaks` are the run's peaks: a file's
+/// rows are they, in order, or (a file of genes and peaks) they and genes.
 pub fn stream_cluster_rates(
-    atac_file: &str,
+    atac_files: &[(&str, Option<&str>)],
     peaks: &[Box<str>],
     cells: &[Box<str>],
     labels: &Labels,
     block: usize,
 ) -> anyhow::Result<(DMatrix<f32>, Vec<f32>)> {
     let n_clusters = labels.names.len();
-    let atac = open_sparse_matrix_by_path(atac_file)?;
     let n_peaks = peaks.len();
-    let rows = atac.row_names()?;
-    anyhow::ensure!(
-        rows.len() == n_peaks,
-        "{atac_file} has {} peaks, the run {n_peaks}: is it the run's ATAC?",
-        rows.len()
-    );
-    // Rates are kept by ATAC row and read by the run's peak: same order.
-    if let Some(i) = (0..n_peaks).find(|&i| rows[i] != peaks[i]) {
-        anyhow::bail!(
-            "{atac_file}: row {i} is {}, the run's peak {}: is it the run's ATAC, in its order?",
-            rows[i],
-            peaks[i]
-        );
-    }
     let cell_of: FxHashMap<&str, usize> = cells
         .iter()
         .enumerate()
         .map(|(i, b)| (b.as_ref(), i))
         .collect();
-    let columns = atac.column_names()?;
-    let cell_idx: Vec<Option<Option<usize>>> = columns
-        .iter()
-        .map(|b| Some(labels.of[*cell_of.get(b.as_ref())?]))
-        .collect();
-    let n_matched = cell_idx.iter().filter(|c| c.is_some()).count();
-    anyhow::ensure!(
-        n_matched > 0,
-        "no ATAC barcode matches an embedded cell that passed QC"
-    );
-    let block = block.max(1);
-    let blocks: Vec<std::ops::Range<usize>> = (0..columns.len())
-        .step_by(block)
-        .map(|lb| lb..(lb + block).min(columns.len()))
-        .collect();
-
     let mut cl_size = vec![0f32; n_clusters];
     let mut counts = DMatrix::<f32>::zeros(n_peaks, n_clusters);
     let mut all = vec![0f32; n_peaks];
     let mut total = 0f32;
-    for cols in &blocks {
-        let csc = atac.read_columns_csc(cols.clone().collect())?;
-        for (j, col) in csc.col_iter().enumerate() {
-            let Some(k) = cell_idx[cols.start + j] else {
-                continue;
-            };
-            let depth: f32 = col.values().iter().sum();
-            total += depth;
-            if let Some(k) = k {
-                cl_size[k] += depth;
-            }
-            for (&p, &x) in col.row_indices().iter().zip(col.values()) {
-                all[p] += x;
+    for &(atac_file, tag) in atac_files {
+        let atac = open_sparse_matrix_by_path(atac_file)?;
+        let row_peak = peaks_of_rows(atac_file, &atac.row_names()?, peaks)?;
+        let columns = atac.column_names()?;
+        let cell_idx: Vec<Option<Option<usize>>> = columns
+            .iter()
+            .map(|b| Some(labels.of[*cell_of.get(&*cell(tag, b))?]))
+            .collect();
+        anyhow::ensure!(
+            cell_idx.iter().any(Option::is_some),
+            "{atac_file}: none of its barcodes is an embedded cell that passed QC{}",
+            tag.map_or_else(String::new, |t| format!(" (sample {t})"))
+        );
+        let block = block.max(1);
+        let blocks: Vec<std::ops::Range<usize>> = (0..columns.len())
+            .step_by(block)
+            .map(|lb| lb..(lb + block).min(columns.len()))
+            .collect();
+        for cols in &blocks {
+            let csc = atac.read_columns_csc(cols.clone().collect())?;
+            for (j, col) in csc.col_iter().enumerate() {
+                let Some(k) = cell_idx[cols.start + j] else {
+                    continue;
+                };
+                let mut depth = 0f32;
+                for (&r, &x) in col.row_indices().iter().zip(col.values()) {
+                    let Some(p) = row_peak[r] else { continue };
+                    depth += x;
+                    all[p] += x;
+                    if let Some(k) = k {
+                        counts[(p, k)] += x;
+                    }
+                }
+                total += depth;
                 if let Some(k) = k {
-                    counts[(p, k)] += x;
+                    cl_size[k] += depth;
                 }
             }
         }
@@ -432,6 +428,40 @@ pub fn stream_cluster_rates(
         }
     });
     Ok((rates, pooled))
+}
+
+/// The run's peak of each row of ATAC file `file`: its rows are the run's
+/// peaks in order, or they and other rows that are not peaks (the genes of
+/// a file of both); any other file is refused.
+fn peaks_of_rows(
+    file: &str,
+    rows: &[Box<str>],
+    peaks: &[Box<str>],
+) -> anyhow::Result<Vec<Option<usize>>> {
+    if rows == peaks {
+        return Ok((0..peaks.len()).map(Some).collect());
+    }
+    let peak_of: FxHashMap<&str, usize> = peaks
+        .iter()
+        .enumerate()
+        .map(|(i, p)| (p.as_ref(), i))
+        .collect();
+    let of: Vec<Option<usize>> = rows
+        .iter()
+        .map(|r| peak_of.get(r.as_ref()).copied())
+        .collect();
+    let found = of.iter().flatten().count();
+    let strays = crate::p2g::samples::peak_rows(rows)
+        .iter()
+        .zip(&of)
+        .filter(|(&is_peak, p)| is_peak && p.is_none())
+        .count();
+    anyhow::ensure!(
+        found == peaks.len() && strays == 0,
+        "{file} holds {found} of the run's {} peaks and {strays} others: is it the run's ATAC?",
+        peaks.len()
+    );
+    Ok(of)
 }
 
 /// `cell_clusters` (each cell's group) and `groups` (the groups and their

@@ -65,16 +65,17 @@ pub struct ViewArgs {
     #[arg(long, value_delimiter = ',')]
     pub rows: Vec<String>,
 
-    /// Write the locus figure as a PDF here and exit (needs --gene)
+    /// Write the figure as a PDF here and exit: the locus (needs --gene), or
+    /// the genome-wide view with --genome
     #[arg(long)]
     pub pdf: Option<std::path::PathBuf>,
 
-    /// Write the locus figure as a PNG here and exit (needs --gene)
+    /// Write the figure as a PNG here and exit, as --pdf does
     #[arg(long)]
     pub png: Option<std::path::PathBuf>,
 
-    /// Print the locus figure as text this many columns wide and exit
-    /// (needs --gene)
+    /// Print the figure as text this many columns wide and exit, as --pdf
+    /// does
     #[arg(long, value_name = "COLUMNS")]
     pub text: Option<u16>,
 
@@ -269,7 +270,8 @@ pub fn run_view(args: &ViewArgs) -> anyhow::Result<()> {
     tui::run(state, &args.session.options(true))
 }
 
-/// Write the locus figure `state` shows to `--pdf` and `--png`.
+/// Write the figure `state` shows (genome-wide with `--genome`, else the
+/// locus) to `--pdf` and `--png`.
 fn export(state: &State, args: &ViewArgs) -> anyhow::Result<()> {
     for p in args.pdf.iter().chain(&args.png) {
         anyhow::ensure!(

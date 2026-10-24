@@ -69,7 +69,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
 # The terminal front ends.
-legume-tui = { version = "0.3", optional = true, features = ["form", "export", "map-display", "save"] }
+legume-tui = { version = "0.3", optional = true, features = ["form", "export", "map-display", "save", "browse"] }
 ratatui = { version = "0.30", optional = true, default-features = false, features = ["crossterm"] }
 ratatui-image = { version = "11.1", optional = true, default-features = false, features = ["crossterm"] }
 image = { version = "0.25", optional = true, default-features = false, features = ["png"] }

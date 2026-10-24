@@ -4,11 +4,11 @@
 
 use super::data::{Measure, Summary};
 use super::State;
-use crate::tui::{session_keys, TOOL};
+use crate::tui::{click, key_line, wheel, ListHit, TOOL};
 use legume_tui::look::Look;
 use legume_tui::Round;
-use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind};
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, MouseEvent};
+use ratatui::layout::{Constraint, Layout, Margin, Rect};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
@@ -17,6 +17,13 @@ use std::time::Duration;
 const TICK: Duration = Duration::from_millis(200);
 
 /// The screen's own state beside what is looked at.
+/// Where the last draw put the gene list and the figure, for the mouse.
+#[derive(Clone, Copy, Debug, Default)]
+struct Drawn {
+    genes: ListHit,
+    figure: Rect,
+}
+
 struct Screen {
     /// The right pane shows the genome-wide view (else the locus).
     genome: bool,
@@ -41,6 +48,9 @@ struct Screen {
     search: Option<String>,
     note: Option<String>,
     quit: bool,
+    /// Where the last draw put the gene list's rows (and the first gene
+    /// shown) and the right pane, for the mouse.
+    drawn: Drawn,
 }
 
 impl Screen {
@@ -57,6 +67,7 @@ impl Screen {
             search: None,
             note: None,
             quit: false,
+            drawn: Drawn::default(),
             state,
         };
         s.rank();
@@ -114,6 +125,46 @@ impl Screen {
     fn pan_genome(&mut self, by: f32) {
         let (from, span) = self.state.genome_view.window();
         self.state.genome_view.from = (from + by * span).clamp(0.0, 1.0 - span);
+    }
+
+    /// The wheel moves through the genes over their list and zooms over
+    /// the figure; a click on a gene goes to it, and on the gene the
+    /// cursor is on, to its locus.
+    fn mouse(&mut self, m: MouseEvent) {
+        if self.search.is_some() {
+            return;
+        }
+        let on_list = self.drawn.genes.row_at(m.column, m.row);
+        let on_figure = self.drawn.figure.contains((m.column, m.row).into());
+        match (wheel(&m), on_list) {
+            // Over the list, as the arrow keys.
+            (Some(d), Some(_)) => {
+                self.key(KeyEvent::from(if d < 0 {
+                    KeyCode::Up
+                } else {
+                    KeyCode::Down
+                }));
+                return;
+            }
+            (Some(d), None) if on_figure => {
+                let by = if d < 0 { 0.8 } else { 1.25 };
+                if self.genome {
+                    self.zoom_genome(by);
+                } else {
+                    self.zoom(by);
+                }
+            }
+            (None, Some(i)) if click(&m) => {
+                if i == self.at {
+                    self.genome = false;
+                } else if i < self.ranked.len() {
+                    self.at = i;
+                }
+            }
+            _ => return,
+        }
+        self.note = None;
+        self.follow();
     }
 
     fn key(&mut self, k: KeyEvent) {
@@ -297,19 +348,29 @@ pub fn run(state: State, opts: &legume_tui::Options) -> anyhow::Result<()> {
                 .map_or_else(String::new, |g| screen.state.run.genes[g].to_string());
             session.status(&format!("{} {gene}", screen.state.run.prefix));
             session.draw(terminal, |f| draw(f, &mut screen))?;
-            match session.poll(terminal, TICK)? {
-                Round::Stopped => return Ok(()),
-                // Another terminal may be attached now: ask it about
-                // pictures, and draw the figure for it.
-                Round::Repainted => {
-                    screen.repick(&session);
-                    screen.shown = None;
+            // Everything that has come in, then one draw: a turn of the
+            // wheel is many events, and the figure is drawn once for them.
+            let mut wait = TICK;
+            loop {
+                match session.poll(terminal, wait)? {
+                    Round::Stopped => return Ok(()),
+                    // Another terminal may be attached now: ask it about
+                    // pictures, and draw the figure for it.
+                    Round::Repainted => {
+                        screen.repick(&session);
+                        screen.shown = None;
+                    }
+                    Round::Event(Event::Key(k)) if k.kind != KeyEventKind::Release => {
+                        screen.key(k);
+                    }
+                    Round::Event(Event::Mouse(m)) => screen.mouse(m),
+                    Round::Event(_) => {}
+                    _ => break,
                 }
-                Round::Event(Event::Key(k)) if k.kind != KeyEventKind::Release => screen.key(k),
-                _ => {}
-            }
-            if screen.quit {
-                return Ok(());
+                if screen.quit {
+                    return Ok(());
+                }
+                wait = Duration::ZERO;
             }
         }
     })
@@ -338,7 +399,10 @@ fn draw(f: &mut Frame, s: &mut Screen) {
     f.render_widget(Paragraph::new(Span::styled(title, look.bold)), head);
     let [left, right] =
         Layout::horizontal([Constraint::Length(32), Constraint::Min(20)]).areas(body);
-    genes(f, s, left, &look);
+    s.drawn = Drawn {
+        genes: genes(f, s, left, &look),
+        figure: right,
+    };
     if (s.figure || s.genome) && s.text {
         text_figure(f, s, right, &look);
     } else if (s.figure || s.genome) && s.picker.is_some() {
@@ -371,19 +435,17 @@ fn draw(f: &mut Frame, s: &mut Screen) {
                 ("q".into(), "quit".into()),
             ];
             keys.retain(|(_, w)| !w.is_empty());
-            keys.extend(session_keys());
-            keys.iter()
-                .map(|(k, w)| format!("{k} {w}"))
-                .collect::<Vec<_>>()
-                .join(" · ")
+            key_line(keys)
         }
     };
     f.render_widget(Paragraph::new(Span::styled(foot_text, look.hint)), foot);
 }
 
-fn genes(f: &mut Frame, s: &Screen, area: Rect, look: &Look) {
-    let rows = area.height.saturating_sub(2) as usize;
-    let first = s.at.saturating_sub(rows.saturating_sub(1));
+/// The ranked genes, and where they were drawn.
+fn genes(f: &mut Frame, s: &Screen, area: Rect, look: &Look) -> ListHit {
+    let inner = area.inner(Margin::new(1, 1));
+    let rows = inner.height as usize;
+    let first = legume_tui::browse::first_visible(s.at, s.ranked.len(), rows);
     let lines: Vec<Line> = s
         .ranked
         .iter()
@@ -401,6 +463,7 @@ fn genes(f: &mut Frame, s: &Screen, area: Rect, look: &Look) {
         .border_style(look.border)
         .title(" genes ");
     f.render_widget(Paragraph::new(lines).block(block), area);
+    ListHit { rows: inner, first }
 }
 
 fn locus(f: &mut Frame, s: &Screen, area: Rect, look: &Look) {

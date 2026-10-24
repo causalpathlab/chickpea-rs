@@ -7,11 +7,14 @@
 //! (a session job), and how a person watches one started elsewhere.
 
 pub mod app;
+pub mod data;
 pub mod draw;
+pub mod pick;
 pub mod worker;
 
 use crate::p2g::{PeakToGeneArgs, RegroupArgs};
 use clap::{Args, FromArgMatches};
+use data::Side;
 use std::path::PathBuf;
 
 /// A step `chickpea run` sets up: its subcommand and what it writes.
@@ -26,6 +29,9 @@ pub struct Step {
     pub outputs: fn(&clap::ArgMatches) -> anyhow::Result<Vec<PathBuf>>,
     /// The flags (long names) listed first: what the step reads and writes.
     pub inputs: &'static [&'static str],
+    /// The count files each sample has, set on the data pane rather than
+    /// as flags.
+    pub data: &'static [Side],
 }
 
 /// The steps, in the order the screen offers them.
@@ -38,16 +44,13 @@ pub const STEPS: &[Step] = &[
             cmd.build();
             cmd
         },
-        outputs: |m| Ok(PeakToGeneArgs::from_arg_matches(m)?.outputs()),
-        inputs: &[
-            "rna",
-            "atac",
-            "gene-coords",
-            "gff-file",
-            "batch",
-            "groups",
-            "out",
-        ],
+        outputs: |m| {
+            let args = PeakToGeneArgs::from_arg_matches(m)?;
+            args.check_pairs()?;
+            Ok(args.outputs())
+        },
+        inputs: &["gene-coords", "gff-file", "batch", "groups", "out"],
+        data: &[Side::Rna, Side::Atac],
     },
     Step {
         name: "regroup",
@@ -58,7 +61,8 @@ pub const STEPS: &[Step] = &[
             cmd
         },
         outputs: |m| Ok(RegroupArgs::from_arg_matches(m)?.outputs()),
-        inputs: &["run", "atac", "groups", "out"],
+        inputs: &["run", "groups", "out"],
+        data: &[Side::Atac],
     },
 ];
 

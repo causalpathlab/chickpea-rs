@@ -38,9 +38,10 @@ fn programs_separate_on_the_multiome_axis() {
         module_only_min_rows: 30,
         ..TwoTrackConfig::default()
     };
+    let samples =
+        chickpea::p2g::samples::pair(&[rna.as_str().into()], &[atac.as_str().into()]).unwrap();
     let input = TwoTrackInput {
-        rna_file: &rna,
-        atac_file: &atac,
+        samples: &samples,
         batch_file: None,
         gene_positions: &genes,
         kernel: &kernel(),

@@ -10,13 +10,16 @@ use std::path::Path;
 pub const TOOL: legume_tui::Tool = legume_tui::Tool::new("chickpea");
 
 /// The modes of a screen: keys with their modifiers where the terminal
-/// reports them, no mouse.
+/// reports them, and the mouse's buttons and wheel (shift+drag still
+/// selects text in most terminals).
 #[must_use]
 pub fn modes() -> legume_tui::Modes {
     use ratatui::crossterm::event::KeyboardEnhancementFlags;
-    legume_tui::Modes::new().keyboard_enhancement(legume_tui::Keyboard::IfSupported(
-        KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES,
-    ))
+    legume_tui::Modes::new()
+        .keyboard_enhancement(legume_tui::Keyboard::IfSupported(
+            KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES,
+        ))
+        .mouse(legume_tui::Mouse::Buttons)
 }
 
 /// The detach and switch keys as a help line lists them; none when the
@@ -25,6 +28,52 @@ pub fn session_keys() -> impl Iterator<Item = (String, String)> {
     legume_tui::help_keys()
         .into_iter()
         .map(|k| (k.key.to_lowercase(), k.short))
+}
+
+/// A screen's key hints, the session's keys after them, as one line.
+#[must_use]
+pub fn key_line(keys: Vec<(String, String)>) -> String {
+    keys.into_iter()
+        .chain(session_keys())
+        .map(|(k, what)| format!("{k} {what}"))
+        .collect::<Vec<_>>()
+        .join(" · ")
+}
+
+/// Where a list was drawn: the area of its rows and the first item shown,
+/// so a click finds its item.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ListHit {
+    pub rows: ratatui::layout::Rect,
+    pub first: usize,
+}
+
+impl ListHit {
+    /// The item drawn at `(x, y)`, if the point is on the list.
+    #[must_use]
+    pub fn row_at(&self, x: u16, y: u16) -> Option<usize> {
+        self.rows
+            .contains((x, y).into())
+            .then(|| self.first + usize::from(y - self.rows.y))
+    }
+}
+
+/// A wheel turn as a step through a list: up −1, down +1.
+#[must_use]
+pub fn wheel(m: &ratatui::crossterm::event::MouseEvent) -> Option<isize> {
+    use ratatui::crossterm::event::MouseEventKind;
+    match m.kind {
+        MouseEventKind::ScrollUp => Some(-1),
+        MouseEventKind::ScrollDown => Some(1),
+        _ => None,
+    }
+}
+
+/// Whether `m` is a press of the left button.
+#[must_use]
+pub fn click(m: &ratatui::crossterm::event::MouseEvent) -> bool {
+    use ratatui::crossterm::event::{MouseButton, MouseEventKind};
+    m.kind == MouseEventKind::Down(MouseButton::Left)
 }
 
 /// The key that runs what a screen set up, as in senna and pinto: ctrl+r.

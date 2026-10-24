@@ -1,13 +1,16 @@
-//! Drawing the run screen: the form, or the run and its log, with the
-//! command line and the keys at the foot.
+//! Drawing the run screen: the count files, the form, or the run and its
+//! log, with the command line and the keys at the foot, and the file
+//! browser over them when it is open.
 
-use super::app::{App, Pane};
+use super::app::{App, Drawn, Pane};
 use super::worker::Ended;
-use crate::tui::{session_keys, RUN_KEY};
+use crate::tui::{key_line, ListHit, RUN_KEY};
+use legume_tui::browse::first_visible;
 use legume_tui::child::gauge;
+use legume_tui::chrome::tail;
 use legume_tui::form::{row_line, Kind};
 use legume_tui::look::Look;
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::{Constraint, Layout, Margin, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
@@ -22,17 +25,169 @@ pub fn draw(f: &mut Frame, app: &App) {
         Constraint::Length(1),
     ])
     .areas(f.area());
-    let title = format!("chickpea run · {} — {}", app.step.name, app.step.about);
-    f.render_widget(Paragraph::new(Span::styled(title, look.bold)), head);
+    let mut drawn = Drawn::default();
+    tabs(f, app, head, &look, &mut drawn);
     match app.pane {
-        Pane::Form => form(f, app, body, &look),
+        Pane::Data => data(f, app, body, &look, &mut drawn),
+        Pane::Form => form(f, app, body, &look, &mut drawn),
         Pane::Run => run(f, app, body, &look),
     }
+    *app.drawn.borrow_mut() = drawn;
     command(f, app, cmd, &look);
     f.render_widget(Paragraph::new(Span::styled(keys(app), look.hint)), foot);
+    if let Some(pick) = &app.pick {
+        pick.draw(f, f.area(), &look);
+    }
 }
 
-fn form(f: &mut Frame, app: &App, area: Rect, look: &Look) {
+/// The head line: the step, and a tab per pane (the one shown bold).
+fn tabs(f: &mut Frame, app: &App, area: Rect, look: &Look, drawn: &mut Drawn) {
+    let title = format!("chickpea run · {}  ", app.step.name);
+    let mut x = area.x + title.chars().count() as u16;
+    let mut spans = vec![Span::styled(title, look.bold)];
+    let samples = app.data.pairs.len();
+    let names = [
+        (Pane::Data, format!(" data ({samples}) ")),
+        (
+            Pane::Form,
+            format!(" flags ({} changed) ", app.form.changed()),
+        ),
+        (Pane::Run, " run ".to_string()),
+    ];
+    for (pane, name) in names {
+        if pane == Pane::Run && app.job.is_none() {
+            continue;
+        }
+        let w = name.chars().count() as u16;
+        drawn.tabs.push((pane, x..x + w));
+        x += w + 1;
+        let style = if pane == app.pane {
+            look.selected
+        } else {
+            look.hint
+        };
+        spans.push(Span::styled(name, style));
+        spans.push(Span::raw(" "));
+    }
+    spans.push(Span::styled(format!(" {}", app.step.about), look.hint));
+    f.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+/// The count files: a row per sample, its name and each side's file.
+fn data(f: &mut Frame, app: &App, area: Rect, look: &Look, drawn: &mut Drawn) {
+    let [rows, help] = Layout::vertical([Constraint::Min(3), Constraint::Length(3)]).areas(area);
+    let d = &app.data;
+    // Files of one folder by name, the folder in the title.
+    let mut folders = d
+        .pairs
+        .iter()
+        .flat_map(super::data::Pair::files)
+        .map(|p| p.parent().unwrap_or(std::path::Path::new("")));
+    let first_folder = folders.next();
+    let common = first_folder.filter(|f| folders.all(|g| g == *f));
+    let title = match common {
+        Some(dir) => format!(
+            " count files, a row per sample · in {} ",
+            legume_tui::browse::tilde(&legume_tui::browse::normalize(dir))
+        ),
+        None => " count files, a row per sample ".into(),
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(look.border)
+        .title(title);
+    let inner = block.inner(rows);
+    f.render_widget(block, rows);
+    let names = d.names();
+    let name_w = names
+        .iter()
+        .flatten()
+        .map(|n| n.chars().count())
+        .max()
+        .unwrap_or(0)
+        .max(6)
+        + 2;
+    let lead = 4 + name_w as u16;
+    let n_sides = d.sides.len() as u16;
+    let col_w = inner.width.saturating_sub(lead) / n_sides.max(1);
+    drawn.cols = (0..n_sides).map(|k| inner.x + lead + k * col_w).collect();
+    // A head line, then the rows.
+    let [titles, list] = Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(inner);
+    let mut head = vec![Span::styled(
+        format!("{:<w$}", "  # sample", w = lead as usize),
+        look.hint,
+    )];
+    for s in d.sides {
+        head.push(Span::styled(
+            format!("{:<w$}", s.title(), w = col_w as usize),
+            look.hint,
+        ));
+    }
+    f.render_widget(Paragraph::new(Line::from(head)), titles);
+    let shown = list.height as usize;
+    let total = d.pairs.len() + 1;
+    let first = first_visible(d.at, total, shown);
+    drawn.list = ListHit { rows: list, first };
+    let cut = |p: &std::path::Path, w: usize| -> String {
+        let s = match (common, p.file_name()) {
+            (Some(_), Some(name)) => name.to_string_lossy().into_owned(),
+            _ => crate::tui::shown(p),
+        };
+        tail(&s, w)
+    };
+    let lines: Vec<Line> = (first..total.min(first + shown))
+        .map(|i| {
+            let mark = if i == d.at { "▸ " } else { "  " };
+            let Some(p) = d.pairs.get(i) else {
+                let style = if i == d.at { look.selected } else { look.hint };
+                return Line::from(vec![
+                    Span::styled(mark, look.bold),
+                    Span::styled("+ add files (a): space marks several in the browser", style),
+                ]);
+            };
+            let name = names[i].clone().unwrap_or_else(|| "—".into());
+            let mut spans = vec![
+                Span::styled(mark, look.bold),
+                Span::raw(format!("{:<2}", i + 1)),
+                Span::raw(format!("{name:<name_w$}")),
+            ];
+            for (c, &side) in d.sides.iter().enumerate() {
+                let w = col_w.saturating_sub(1) as usize;
+                let (text, style) = match p.get(side) {
+                    Some(path) => (cut(path, w), look.page),
+                    None => ("(none: enter browses)".into(), look.hint),
+                };
+                let style = if i == d.at && c == d.col {
+                    look.selected
+                } else {
+                    style
+                };
+                spans.push(Span::styled(format!("{text:<w$}"), style));
+                spans.push(Span::raw(" "));
+            }
+            Line::from(spans)
+        })
+        .collect();
+    f.render_widget(Paragraph::new(lines), list);
+    let about = match d.sides {
+        [_] => "Each sample's ATAC, in the order peak-to-gene was given them.",
+        _ => {
+            "Each sample's RNA and ATAC, for the same cells (one file of both is in both \
+             columns). With several samples a cell is {barcode}@{sample}, the sample named \
+             after its files, and each sample is a batch."
+        }
+    };
+    let text = vec![
+        Line::from(Span::styled(
+            "a adds files · enter changes the file under the cursor · ←→ column · x removes",
+            look.hint,
+        )),
+        Line::from(about),
+    ];
+    f.render_widget(Paragraph::new(text).wrap(Wrap { trim: true }), help);
+}
+
+fn form(f: &mut Frame, app: &App, area: Rect, look: &Look, drawn: &mut Drawn) {
     let [rows, help] = Layout::vertical([Constraint::Min(3), Constraint::Length(4)]).areas(area);
     let width = app
         .form
@@ -44,8 +199,10 @@ fn form(f: &mut Frame, app: &App, area: Rect, look: &Look) {
         + 2;
     let complaint = app.check.as_ref().err();
     let blamed = complaint.and_then(|c| legume_tui::form::blamed(c, &app.form.fields));
-    let shown_rows = rows.height.saturating_sub(2) as usize;
-    let first = app.at.saturating_sub(shown_rows.saturating_sub(1));
+    let inner = rows.inner(Margin::new(1, 1));
+    let shown_rows = inner.height as usize;
+    let first = first_visible(app.at, app.form.fields.len(), shown_rows);
+    drawn.list = ListHit { rows: inner, first };
     let lines: Vec<Line> = app
         .form
         .fields
@@ -67,12 +224,17 @@ fn form(f: &mut Frame, app: &App, area: Rect, look: &Look) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(look.border)
-        .title(format!(" flags ({} changed) ", app.form.changed()));
+        .title(" flags ");
     f.render_widget(Paragraph::new(lines).block(block), rows);
-    let field = &app.form.fields[app.at];
+    let Some(field) = app.form.fields.get(app.at) else {
+        return;
+    };
     let how = match field.kind {
         Kind::Flag { .. } => "enter toggles",
         Kind::Choice(_) => "←/→ or enter changes",
+        Kind::Text if app.files.contains(&field.long) => {
+            "enter browses for the file, e types it (empty: default)"
+        }
         Kind::Text => "enter types a value (empty: default)",
     };
     let text = vec![
@@ -174,24 +336,19 @@ fn command(f: &mut Frame, app: &App, area: Rect, look: &Look) {
 
 fn keys(app: &App) -> String {
     let mut keys: Vec<(String, String)> = match app.pane {
+        Pane::Data => vec![
+            ("a".into(), "add files".into()),
+            ("enter".into(), "change".into()),
+            (RUN_KEY.into(), "run".into()),
+        ],
         Pane::Form => vec![
             ("↑↓".into(), "move".into()),
             ("enter".into(), "change".into()),
             (RUN_KEY.into(), "run".into()),
         ],
-        Pane::Run => vec![
-            ("↑↓".into(), "scroll".into()),
-            ("x".into(), "stop".into()),
-            ("e".into(), "flags".into()),
-        ],
+        Pane::Run => vec![("↑↓".into(), "scroll".into()), ("x".into(), "stop".into())],
     };
-    if app.pane == Pane::Form && app.job.is_some() {
-        keys.push(("tab".into(), "run".into()));
-    }
+    keys.push(("tab".into(), "next pane".into()));
     keys.push(("q".into(), "quit".into()));
-    keys.extend(session_keys());
-    keys.iter()
-        .map(|(k, what)| format!("{k} {what}"))
-        .collect::<Vec<_>>()
-        .join(" · ")
+    key_line(keys)
 }

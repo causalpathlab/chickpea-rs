@@ -11,6 +11,7 @@ pub mod groups;
 pub mod input;
 pub mod regroup;
 pub mod run;
+pub mod samples;
 pub mod two_track;
 pub mod workflow;
 

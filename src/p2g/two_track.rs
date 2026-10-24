@@ -8,11 +8,11 @@
 
 use super::cis::{build_cis_pairs, AbcKernel, CisPairs};
 use crate::common::*;
-use data_beans::sparse_io::open_sparse_matrix_by_path;
+use crate::p2g::samples::{self, Side};
 use genomic_data::coordinates::{parse_peak_coordinates, GeneTss};
 use graph_embedding_util as ge;
 use legume_numeric::matrix::traits::ConvertMatOps;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 /// Suffix of the RNA rows on the joint axis.
 pub const RNA_TAG: &str = "rna";
@@ -80,10 +80,11 @@ impl Default for TwoTrackConfig {
     }
 }
 
-/// Inputs; `gene_positions` is aligned to the RNA file's rows.
+/// Inputs; `gene_positions` is aligned to the RNA files' rows.
 pub struct TwoTrackInput<'a> {
-    pub rna_file: &'a str,
-    pub atac_file: &'a str,
+    /// Each sample's RNA and ATAC; every RNA file has the same genes, and
+    /// every ATAC file the same peaks.
+    pub samples: &'a [crate::p2g::samples::Sample],
     pub batch_file: Option<&'a str>,
     pub gene_positions: &'a [Option<GeneTss>],
     pub kernel: &'a AbcKernel,
@@ -123,16 +124,15 @@ pub fn embed_two_track(
     input: &TwoTrackInput,
     cfg: &TwoTrackConfig,
 ) -> anyhow::Result<TwoTrackEmbedding> {
-    let rna = open_sparse_matrix_by_path(input.rna_file)?;
-    let gene_names = rna.row_names()?;
+    let first = &input.samples[0];
+    let gene_names = samples::rows(first, Side::Rna)?;
     anyhow::ensure!(
         input.gene_positions.len() == gene_names.len(),
         "{} gene positions for {} RNA rows",
         input.gene_positions.len(),
         gene_names.len()
     );
-    let atac = open_sparse_matrix_by_path(input.atac_file)?;
-    let peak_names = atac.row_names()?;
+    let peak_names = samples::rows(first, Side::Atac)?;
     let peaks = parse_peak_coordinates(&peak_names);
     let pairs = build_cis_pairs(input.gene_positions, &peaks, input.kernel);
     info!(
@@ -145,19 +145,66 @@ pub fn embed_two_track(
         peaks.len(),
         pairs.n_unparsed_peaks
     );
-    drop((rna, atac));
 
     // One axis: RNA genes ∪ ATAC peaks (bge multiome).
     let mut unified = ge::load_unified_data(ge::LoadUnifiedArgs {
-        data_files: vec![input.rna_file.into(), input.atac_file.into()],
+        data_files: input
+            .samples
+            .iter()
+            .flat_map(|s| [s.rna.clone(), s.atac.clone()])
+            .collect(),
         batch_files: input.batch_file.map(|b| vec![b.into()]),
         // Exact: RNA symbols and peak loci are disjoint names. Mixed would
         // rewrite `GENE_1` → `1` via the gene-symbol rule and break lookup.
         feature_kind: Some(ge::FeatureNameKind::Exact),
         column_alignment: data_beans::sparse_io_vector::ColumnAlignment::Union,
-        per_file_feature_suffix: Some(vec![RNA_TAG.into(), ATAC_TAG.into()]),
+        per_file_feature_suffix: Some(
+            input
+                .samples
+                .iter()
+                .flat_map(|_| [RNA_TAG.into(), ATAC_TAG.into()])
+                .collect(),
+        ),
+        // Several samples' cells as {barcode}@{sample}: one barcode in two
+        // samples is two cells. The tags are the batches unless given.
+        per_file_barcode_suffix: (input.samples.len() > 1).then(|| {
+            input
+                .samples
+                .iter()
+                .flat_map(|s| [s.name.clone(), s.name.clone()])
+                .collect()
+        }),
         ..Default::default()
     })?;
+
+    // A mixed file is read as both sides of its sample: its genes go on
+    // the RNA side only, and its peaks on the ATAC side.
+    if input.samples.iter().any(samples::Sample::mixed) {
+        let genes: FxHashSet<&str> = gene_names.iter().map(AsRef::as_ref).collect();
+        let peaks: FxHashSet<&str> = peak_names.iter().map(AsRef::as_ref).collect();
+        let keep: Vec<usize> = (0..unified.feature_names.len())
+            .filter(|&r| match unified.feature_names[r].rsplit_once('/') {
+                Some((base, RNA_TAG)) => genes.contains(base),
+                Some((base, ATAC_TAG)) => peaks.contains(base),
+                _ => true,
+            })
+            .collect();
+        // Off the backend too, not the fit's axis alone: the projection and
+        // the pseudobulks read the backend's rows.
+        anyhow::ensure!(
+            unified
+                .feature_to_backend_row
+                .iter()
+                .copied()
+                .eq(0..unified.feature_names.len()),
+            "the unified axis is not the backend's rows"
+        );
+        let mut on = vec![false; unified.feature_names.len()];
+        keep.iter().for_each(|&r| on[r] = true);
+        unified.subset_features(&keep);
+        unified.count_backend_mut().mask_rows(&on)?;
+        unified.feature_to_backend_row = (0..keep.len()).collect();
+    }
 
     let feature_names = unified.feature_names.clone();
     let mut rna_feat: FxHashMap<Box<str>, u32> = FxHashMap::default();

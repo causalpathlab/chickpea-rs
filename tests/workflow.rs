@@ -32,9 +32,10 @@ fn the_workflow_writes_consistent_tables() {
     let (rna, atac) = write_fixture(dir.path());
     let out = dir.path().join("run").to_string_lossy().into_owned();
     let genes = gene_positions();
+    let samples =
+        chickpea::p2g::samples::pair(&[rna.as_str().into()], &[atac.as_str().into()]).unwrap();
     let input = TwoTrackInput {
-        rna_file: &rna,
-        atac_file: &atac,
+        samples: &samples,
         batch_file: None,
         gene_positions: &genes,
         kernel: &kernel(),
@@ -135,9 +136,10 @@ fn qc_failed_cells_are_left_out_of_every_cell_output() {
     let (rna, atac) = write_fixture(dir.path());
     let out = dir.path().join("run").to_string_lossy().into_owned();
     let genes = gene_positions();
+    let samples =
+        chickpea::p2g::samples::pair(&[rna.as_str().into()], &[atac.as_str().into()]).unwrap();
     let input = TwoTrackInput {
-        rna_file: &rna,
-        atac_file: &atac,
+        samples: &samples,
         batch_file: None,
         gene_positions: &genes,
         kernel: &kernel(),
