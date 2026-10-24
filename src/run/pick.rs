@@ -21,8 +21,8 @@ pub enum Want {
     Data,
     /// One count file for the data pane's cell under the cursor.
     Cell,
-    /// The flag with this long name.
-    Flag(String),
+    /// The flag with this long name, and whether it takes several files.
+    Flag { long: String, many: bool },
 }
 
 /// What a key or click did.
@@ -37,7 +37,7 @@ pub enum Outcome {
 pub struct Pick {
     pub browser: Browser,
     pub want: Want,
-    /// Files marked to take together (data only).
+    /// Files marked to take together (data, or a flag of several).
     pub marked: BTreeSet<PathBuf>,
     title: String,
     /// The listing as last drawn.
@@ -80,6 +80,7 @@ fn wanted(long: &str) -> (&'static str, fn(&str) -> bool) {
             "lupin rounds (.json) and cell, group tables (.parquet, .tsv, .csv)",
             |n| ends(n, &[".json", ".parquet", ".tsv", ".csv", ".txt"]),
         ),
+        "atac" => ("count files (.zarr, .zarr.zip, .h5)", is_data),
         "run" => ("finished runs (.links.parquet, .regroup.json)", |n| {
             n.ends_with(".links.parquet") || n.ends_with(".regroup.json")
         }),
@@ -112,9 +113,10 @@ impl Pick {
                 is_data,
             ),
             Want::Cell => ("a count file (.zarr, .zarr.zip, .h5)".into(), is_data),
-            Want::Flag(long) => {
+            Want::Flag { long, many } => {
                 let (what, keep) = wanted(long);
-                (format!("--{long}: {what}"), keep)
+                let several = if *many { ": space marks several" } else { "" };
+                (format!("--{long}: {what}{several}"), keep)
             }
         };
         let start = at
@@ -144,7 +146,7 @@ impl Pick {
     }
 
     fn many(&self) -> bool {
-        self.want == Want::Data
+        matches!(self.want, Want::Data | Want::Flag { many: true, .. })
     }
 
     /// Mark or unmark the file under the cursor, and move on.

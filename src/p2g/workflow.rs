@@ -151,24 +151,19 @@ pub fn trained_prefix(prefix: &str) -> anyhow::Result<String> {
     {
         return Ok(prefix.to_string());
     }
-    let text =
-        std::fs::read_to_string(&record).map_err(|e| anyhow::anyhow!("reading {record}: {e}"))?;
-    let v: serde_json::Value =
-        serde_json::from_str(&text).map_err(|e| anyhow::anyhow!("{record} is not JSON: {e}"))?;
+    let v = crate::p2g::record::read_json(&record)?;
     let run = v["run"]
         .as_str()
         .ok_or_else(|| anyhow::anyhow!("{record} names no run"))?;
-    // Recorded relative to the record's folder, and in full for when the
-    // record's folder has moved without the run.
-    let dir = std::path::Path::new(&record)
-        .parent()
-        .unwrap_or(std::path::Path::new(""));
-    let near = tidy(&dir.join(run)).to_string_lossy().into_owned();
+    // Recorded relative to the record's folder, and in full.
+    let dir = crate::p2g::record::folder(&record);
     let trained = |p: &str| std::path::Path::new(&table(p, LINKS)).exists();
-    Ok(match v["run_abs"].as_str() {
-        Some(full) if !trained(&near) && trained(full) => full.to_string(),
-        _ => near,
-    })
+    Ok(crate::p2g::record::located(
+        dir,
+        run,
+        v["run_abs"].as_str(),
+        trained,
+    ))
 }
 
 /// `path` with its `.` and `..` worked out by name, not by the file system

@@ -9,6 +9,7 @@ pub mod cis;
 pub mod context;
 pub mod groups;
 pub mod input;
+pub mod record;
 pub mod regroup;
 pub mod run;
 pub mod samples;

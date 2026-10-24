@@ -82,7 +82,8 @@ enum Commands {
                       corr and score (gate × corr), and gene_idx and peak_idx.\n\
                       {out}.links_by_cluster.parquet has each pair's gate and abc\n\
                       shares in each cell group (Leiden clusters, or --groups).\n\
-                      Gene, peak and cell embeddings and cell clusters are written too.\n\
+                      Gene, peak and cell embeddings and cell clusters are written too,\n\
+                      and {out}.run.json records the samples' files, groups and flags.\n\
                       `chickpea view {out}` looks at them; `chickpea regroup` redoes\n\
                       the groups.",
         after_long_help = ENV_HELP,
@@ -97,7 +98,9 @@ enum Commands {
                       A group's link shares need only the trained gates (in\n\
                       {run}.links.parquet) and the peaks' accessibility in its cells,\n\
                       so the run is not trained again: a lupin round's cell types\n\
-                      take the place of the Leiden clusters in minutes.\n\
+                      take the place of the Leiden clusters in minutes. Each sample's\n\
+                      ATAC is the file the run's record ({run}.run.json) names;\n\
+                      --atac gives one that has moved.\n\
                       \n\
                       Writes {out}.groups, cell_clusters, peak_rates and\n\
                       links_by_cluster, and {out}.regroup.json, which names the run\n\
@@ -105,8 +108,8 @@ enum Commands {
                       (chickpea view {out}) without copying them.\n\
                       \n\
                       Example:\n\
-                      \x20 chickpea regroup --run out/p2g --atac atac.zarr \\\n\
-                      \x20     --groups lupin/X.L2.json -o out/p2g.L2",
+                      \x20 chickpea regroup --run out/p2g --groups lupin/X.L2.json \\\n\
+                      \x20     -o out/p2g.L2",
         after_long_help = ENV_HELP
     )]
     Regroup(p2g::RegroupArgs),

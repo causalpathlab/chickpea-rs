@@ -102,7 +102,7 @@ Key options (see `chickpea peak-to-gene --help` for all):
 | `--groups` | Leiden | cell groups for the per-group tables: a lupin round (`.json`), its argmax table, or a cell, group table |
 | `-o`, `--out` | — | output prefix |
 
-Outputs, all `{out}.*.parquet`:
+Outputs, all `{out}.*.parquet`, and the run's record `{out}.run.json`:
 
 | File | Contents |
 |------|----------|
@@ -116,11 +116,13 @@ Outputs, all `{out}.*.parquet`:
 
 ### Regroup, run and view
 
-`chickpea regroup --run out/p2g --atac atac.zarr --groups lupin/X.L2.json -o out/p2g.L2`
-(each sample's ATAC, in the order peak-to-gene was given them)
+`chickpea regroup --run out/p2g --groups lupin/X.L2.json -o out/p2g.L2`
 redoes a finished run's per-group tables for other cell groups (a lupin
 round's cell types, say) without training again, and writes
-`{out}.regroup.json` naming the run whose links it uses.
+`{out}.regroup.json` naming the run whose links it uses. It reads each
+sample's ATAC from the run's record, `{out}.run.json` (the samples' files,
+groups and flags, relative to the record and in full); `--atac` gives a
+file that has moved, matched to its sample by name.
 
 `chickpea run` sets up a step on a terminal screen and runs it with its log
 on screen: the count files on a data pane, a row per sample, picked in a file

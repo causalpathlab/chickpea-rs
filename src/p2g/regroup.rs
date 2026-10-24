@@ -7,19 +7,24 @@
 //! `cell_clusters`, `peak_rates` and `links_by_cluster` under its own out,
 //! and `{out}.regroup.json`, which names the run whose `links`, `peaks`,
 //! `genes` and `gene_embedding` it uses (and the groups and ATAC it read),
-//! so it opens as a run of its own (`chickpea view`) without copies.
+//! so it opens as a run of its own (`chickpea view`) without copies. The
+//! ATAC files are those the run's record (`{run}.run.json`) names.
 
 use crate::common::*;
 use crate::p2g::cis::CisPairs;
 use crate::p2g::groups::Groups;
+use crate::p2g::record::{
+    ensure_atac, folder, read_samples, recorded, relative_to, run_record, with_atac, write_json,
+};
+use crate::p2g::samples::{tags_of, Sample};
 use crate::p2g::workflow::{
-    prefix_of, regroup_record, stream_cluster_rates, table, tidy, trained_run, write_cell_tables,
+    prefix_of, regroup_record, stream_cluster_rates, table, trained_run, write_cell_tables,
     write_links_by_cluster, write_peak_rates, Labels, CELL_CLUSTERS, GENE_EMBEDDING, GROUPS, LINKS,
     LINKS_BY_CLUSTER, PEAKS, PEAK_RATES,
 };
 use legume_numeric::matrix::parquet::read_table_columns;
 use rustc_hash::FxHashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// What regroup computes anew.
 pub const MADE: [&str; 4] = [GROUPS, CELL_CLUSTERS, PEAK_RATES, LINKS_BY_CLUSTER];
@@ -35,9 +40,14 @@ pub struct RegroupArgs {
 
     #[arg(
         long,
-        required = true,
         num_args = 1..,
-        help = "The run's ATAC peak counts (zarr/h5), each sample's file"
+        value_hint = clap::ValueHint::FilePath,
+        help = "ATAC peak counts in place of the files the run's record names",
+        long_help = "ATAC peak counts (zarr/h5) in place of the files the run's record\n\
+                     ({run}.run.json) names, for a sample whose file has moved: each\n\
+                     stands in for the sample whose name its file name has (or whose\n\
+                     recorded file has its name). A run without a record needs every\n\
+                     sample's, in the order peak-to-gene was given them."
     )]
     atac: Vec<Box<str>>,
 
@@ -109,18 +119,16 @@ pub fn run_regroup(args: &RegroupArgs) -> anyhow::Result<()> {
     );
 
     let labels = Labels::given(&groups, &cells)?;
-    let tags = crate::p2g::samples::tags_of(&cells, args.atac.len())?;
-    let atac: Vec<(&str, Option<&str>)> = args
-        .atac
+    let samples = atac_of(&trained, &cells, &args.atac)?;
+    let atac: Vec<(&str, Option<&str>)> = samples
         .iter()
-        .zip(&tags)
-        .map(|(f, t)| (&**f, t.as_deref()))
+        .map(|s| (&*s.atac, s.name.as_deref()))
         .collect();
     let (lambda, pooled) = stream_cluster_rates(&atac, &peaks, &cells, &labels, args.block_size)?;
     write_cell_tables(&args.out, &cells, &labels)?;
     write_peak_rates(&table(&args.out, PEAK_RATES), &peaks, &pooled, &lambda)?;
     write_links_by_cluster(&table(&args.out, LINKS_BY_CLUSTER), &pairs, &gate, &lambda)?;
-    write_record(&args.out, &trained, args)?;
+    write_record(&args.out, &trained, &args.groups, &samples)?;
     info!(
         "Done: {} groups ({}) → {}",
         labels.names.len(),
@@ -130,40 +138,48 @@ pub fn run_regroup(args: &RegroupArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// `{out}.regroup.json`: the trained run whose tables `out` uses (relative
-/// to the record's folder, and in full), and what the regroup read.
-fn write_record(out: &str, trained: &str, args: &RegroupArgs) -> anyhow::Result<()> {
-    let record = regroup_record(out);
-    let dir = Path::new(&record).parent().unwrap_or(Path::new(""));
-    let rel = |p: &str| -> String {
-        let p = Path::new(p);
-        // Absolute and without `.` or `..`, so the folders compare.
-        let abs = |q: &Path| tidy(&std::path::absolute(q).unwrap_or_else(|_| q.to_path_buf()));
-        relative(&abs(p), &abs(dir)).to_string_lossy().into_owned()
+/// Each sample of the run at `trained`, whose cells are `cells`, with the
+/// ATAC to read: its record's, `given` standing in for a sample's; for a
+/// run without a record, `given` in the order of the samples' tags.
+fn atac_of(trained: &str, cells: &[Box<str>], given: &[Box<str>]) -> anyhow::Result<Vec<Sample>> {
+    let recorded = match read_samples(trained)? {
+        Some(recorded) => recorded,
+        None => {
+            anyhow::ensure!(
+                !given.is_empty(),
+                "{} does not exist (a run from before records): give each sample's ATAC \
+                 with --atac, in the order peak-to-gene was given them",
+                run_record(trained)
+            );
+            // The samples by their tags alone, their files all given.
+            tags_of(cells, given.len())?
+                .into_iter()
+                .map(|name| Sample {
+                    name,
+                    rna: "".into(),
+                    atac: "".into(),
+                })
+                .collect()
+        }
     };
-    let full = std::path::absolute(trained).unwrap_or_else(|_| PathBuf::from(trained));
-    let v = serde_json::json!({
-        "run": rel(trained),
-        "run_abs": tidy(&full).to_string_lossy(),
-        "groups": rel(&args.groups),
-        "atac": args.atac.iter().map(|a| rel(a)).collect::<Vec<_>>(),
-    });
-    std::fs::write(&record, serde_json::to_string_pretty(&v)? + "\n")
-        .map_err(|e| anyhow::anyhow!("writing {record}: {e}"))
+    let samples = with_atac(recorded, given)?;
+    ensure_atac(&samples)?;
+    Ok(samples)
 }
 
-/// `path` relative to the folder `from`, both absolute.
-fn relative(path: &Path, from: &Path) -> PathBuf {
-    let (p, f): (Vec<_>, Vec<_>) = (path.components().collect(), from.components().collect());
-    let same = p.iter().zip(&f).take_while(|(a, b)| a == b).count();
-    let mut out = PathBuf::new();
-    for _ in same..f.len() {
-        out.push("..");
-    }
-    for c in &p[same..] {
-        out.push(c);
-    }
-    out
+/// `{out}.regroup.json`: the trained run whose tables `out` uses (relative
+/// to the record's folder, and in full), and the groups and ATAC it read.
+fn write_record(out: &str, trained: &str, groups: &str, samples: &[Sample]) -> anyhow::Result<()> {
+    let record = regroup_record(out);
+    let dir = folder(&record);
+    let (run, run_abs) = recorded(trained, dir);
+    let v = serde_json::json!({
+        "run": run,
+        "run_abs": run_abs,
+        "groups": relative_to(groups, dir),
+        "atac": samples.iter().map(|s| relative_to(&s.atac, dir)).collect::<Vec<_>>(),
+    });
+    write_json(&record, &v)
 }
 
 /// The run's pairs, gene by gene in `genes`' order, and their gates, from

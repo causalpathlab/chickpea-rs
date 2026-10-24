@@ -45,19 +45,12 @@ fn tabs(f: &mut Frame, app: &App, area: Rect, look: &Look, drawn: &mut Drawn) {
     let title = format!("chickpea run · {}  ", app.step.name);
     let mut x = area.x + title.chars().count() as u16;
     let mut spans = vec![Span::styled(title, look.bold)];
-    let samples = app.data.pairs.len();
-    let names = [
-        (Pane::Data, format!(" data ({samples}) ")),
-        (
-            Pane::Form,
-            format!(" flags ({} changed) ", app.form.changed()),
-        ),
-        (Pane::Run, " run ".to_string()),
-    ];
-    for (pane, name) in names {
-        if pane == Pane::Run && app.job.is_none() {
-            continue;
-        }
+    for pane in app.panes() {
+        let name = match pane {
+            Pane::Data => format!(" data ({}) ", app.data.pairs.len()),
+            Pane::Form => format!(" flags ({} changed) ", app.form.changed()),
+            Pane::Run => " run ".to_string(),
+        };
         let w = name.chars().count() as u16;
         drawn.tabs.push((pane, x..x + w));
         x += w + 1;
@@ -169,14 +162,9 @@ fn data(f: &mut Frame, app: &App, area: Rect, look: &Look, drawn: &mut Drawn) {
         })
         .collect();
     f.render_widget(Paragraph::new(lines), list);
-    let about = match d.sides {
-        [_] => "Each sample's ATAC, in the order peak-to-gene was given them.",
-        _ => {
-            "Each sample's RNA and ATAC, for the same cells (one file of both is in both \
-             columns). With several samples a cell is {barcode}@{sample}, the sample named \
-             after its files, and each sample is a batch."
-        }
-    };
+    let about = "Each sample's RNA and ATAC, for the same cells (one file of both is in both \
+                 columns). With several samples a cell is {barcode}@{sample}, the sample named \
+                 after its files, and each sample is a batch.";
     let text = vec![
         Line::from(Span::styled(
             "a adds files · enter changes the file under the cursor · ←→ column · x removes",

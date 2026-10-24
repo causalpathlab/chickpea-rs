@@ -1,6 +1,6 @@
 //! The data pane: a step's count files, one row per sample (its RNA and its
-//! ATAC for peak-to-gene, its ATAC for regroup), set apart from the other
-//! flags as senna's data screen is. Files are added from the browser,
+//! ATAC, for peak-to-gene), set apart from the other flags as senna's data
+//! screen is; a step without count files (regroup) has none. Files are added from the browser,
 //! several at once: each is told RNA or ATAC by its name (or, failing
 //! that, by whether its rows are peaks) and paired by the words of the
 //! names.
@@ -70,11 +70,10 @@ impl Data {
         }
     }
 
-    /// Whether a sample has an RNA and an ATAC file (peak-to-gene's), not
-    /// its ATAC alone (regroup's).
+    /// Whether the step has count files, so a data pane.
     #[must_use]
-    pub fn paired(&self) -> bool {
-        self.sides.len() == 2
+    pub fn shown(&self) -> bool {
+        !self.sides.is_empty()
     }
 
     /// The rows given as flags: `--rna a b --atac c d` read back.
@@ -118,6 +117,9 @@ impl Data {
     /// Why the rows cannot run yet: no files, or a sample without one.
     #[must_use]
     pub fn problem(&self) -> Option<String> {
+        if !self.shown() {
+            return None;
+        }
         if self.pairs.is_empty() {
             let what: Vec<&str> = self.sides.iter().map(|s| s.title()).collect();
             return Some(format!("add the {} files (a)", what.join(" and ")));
@@ -133,7 +135,7 @@ impl Data {
     #[must_use]
     pub fn names(&self) -> Vec<Option<String>> {
         let none = vec![None; self.pairs.len()];
-        if !self.paired() || self.problem().is_some() {
+        if self.problem().is_some() {
             return none;
         }
         let list = |s: Side| -> Vec<Box<str>> {
@@ -174,11 +176,7 @@ impl Data {
         let mut pools: [Vec<PathBuf>; 2] = [Vec::new(), Vec::new()];
         let mut both = 0;
         for f in files {
-            match if self.paired() {
-                holds(&f)
-            } else {
-                Holds::Atac
-            } {
+            match holds(&f) {
                 Holds::Rna => pools[0].push(f),
                 Holds::Atac => pools[1].push(f),
                 Holds::Both => {
@@ -211,7 +209,6 @@ impl Data {
         );
         match (n_rna, n_atac, both) {
             (0, 0, 0) => "nothing new".into(),
-            _ if !self.paired() => format!("{n_atac} ATAC files added"),
             (_, _, 0) => format!("{n_rna} RNA and {n_atac} ATAC files added"),
             _ => format!("{n_rna} RNA, {n_atac} ATAC and {both} RNA + ATAC files added"),
         }

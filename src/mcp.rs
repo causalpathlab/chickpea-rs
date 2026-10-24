@@ -3,7 +3,7 @@
 //! job unless asked otherwise, since a run takes minutes to hours) in the
 //! project's records, and read the links a run wrote.
 
-use crate::p2g::workflow::{table, tables, LINKS};
+use crate::p2g::workflow::{table, LINKS};
 use crate::p2g::{PeakToGeneArgs, RegroupArgs};
 use anyhow::Context;
 use clap::{Args, FromArgMatches};
@@ -136,7 +136,7 @@ impl Server {
         let out = match a.out.as_deref().map(str::trim) {
             Some(out) if !out.is_empty() => shown_path(Path::new(out)),
             _ => {
-                cx.free_prefix("p2g", |out| Ok(tables(out)), |_| false)
+                cx.free_prefix("p2g", |out| Ok(PeakToGeneArgs::outputs_of(out)), |_| false)
                     .context("give out, the output prefix")?
                     .0
             }
@@ -175,7 +175,9 @@ impl Server {
         let run = crate::p2g::workflow::prefix_of(&shown_path(Path::new(&a.run)));
         crate::p2g::workflow::trained_run(&run)?;
         argv.extend(["--run".into(), run.clone()]);
-        push_paths(&mut argv, "--atac", &a.atac.0)?;
+        if !a.atac.0.is_empty() {
+            push_paths(&mut argv, "--atac", &a.atac.0)?;
+        }
         push_paths(&mut argv, "--groups", std::slice::from_ref(&a.groups))?;
         let out = match a.out.as_deref().map(str::trim) {
             Some(out) if !out.is_empty() => shown_path(Path::new(out)),
@@ -440,7 +442,7 @@ fn push_paths(argv: &mut Vec<String>, flag: &str, paths: &[String]) -> anyhow::R
 }
 
 /// Paths, one per sample: a list, or one path as a string.
-#[derive(Deserialize)]
+#[derive(Deserialize, Default)]
 #[serde(from = "OneOrMany")]
 struct Paths(Vec<String>);
 
@@ -477,6 +479,7 @@ fn in_background() -> bool {
 #[serde(deny_unknown_fields)]
 struct RegroupCall {
     run: String,
+    #[serde(default)]
     atac: Paths,
     groups: String,
     out: Option<String>,
@@ -540,17 +543,18 @@ fn specs() -> Vec<ToolSpec> {
              trained gates and the peaks' accessibility in its cells. Writes {out}.groups, \
              cell_clusters, peak_rates and links_by_cluster, and {out}.regroup.json naming the run \
              whose links it uses, so out opens as a run of its own (view_open, p2g_links). \
-             It reads the ATAC counts once: minutes; waits unless background.",
+             It reads each sample's ATAC counts once, from the files the run's record names: \
+             minutes; waits unless background.",
             json!({
                 "type": "object",
                 "properties": {
                     "run": path("The finished run's out prefix, or one of its tables"),
-                    "atac": paths("The run's ATAC peak counts: each sample's file (a list, or a path for one sample)"),
+                    "atac": paths("ATAC peak counts in place of the files the run's record ({run}.run.json) names, for a sample whose file has moved: each stands in for the sample its file name names (a list, or a path). A run without a record needs every sample's, in peak-to-gene's order"),
                     "groups": path("The new groups: a lupin round's manifest (.json, read for annotate.argmax), its argmax table, or a cell, group table"),
                     "out": path("Output prefix for the regrouped run [default: results/<today>/regroup.{groups' name}]"),
                     "background": {"type": "boolean", "description": "Run as a background job and return at once [default: false]"},
                 },
-                "required": ["run", "atac", "groups"],
+                "required": ["run", "groups"],
                 "additionalProperties": false,
             }),
         ),

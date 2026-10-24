@@ -3,6 +3,7 @@
 use crate::common::*;
 use crate::p2g::cis::AbcKernel;
 use crate::p2g::input::load_gene_coords_tsv;
+use crate::p2g::record::{run_record, write_run_record};
 use crate::p2g::samples::{peak_rows, same_rows, Sample, Side};
 use crate::p2g::two_track::{TwoTrackConfig, TwoTrackInput};
 use crate::p2g::workflow::{run_links, table, tables, LinkConfig, LINKS};
@@ -222,6 +223,35 @@ pub struct PeakToGeneArgs {
 }
 
 impl PeakToGeneArgs {
+    /// The flags the run's record keeps: those that shape what it trains,
+    /// its gene positions and batches as given.
+    fn flags(&self) -> serde_json::Value {
+        serde_json::json!({
+            "gene_coords": self.gene_coords.as_deref(),
+            "gff_file": self.gff_file.as_deref(),
+            "batch": self.batch.as_deref(),
+            "qc": self.qc.to_config().is_some(),
+            "cis_window": self.cis_window,
+            "max_cis": self.max_cis,
+            "contact_gamma": self.contact_gamma,
+            "contact_pseudocount": self.contact_pseudocount,
+            "align_weight": self.align_weight,
+            "mix": self.mix,
+            "embedding_dim": self.embedding_dim,
+            "epochs": self.epochs,
+            "num_levels": self.num_levels,
+            "sort_dim": self.sort_dim,
+            "proj_dim": self.proj_dim,
+            "weight_decay": self.weight_decay,
+            "feature_modules": self.feature_modules,
+            "peak_modules": self.peak_modules,
+            "phase1_cells_per_pb": self.phase1_cells_per_pb,
+            "module_only_min_rows": self.module_only_min_rows,
+            "n_clusters": self.n_clusters,
+            "seed": self.seed,
+        })
+    }
+
     /// The samples: `--data` told apart and paired by reading the files'
     /// rows, or `--rna` and `--atac` paired by position.
     pub fn samples(&self) -> anyhow::Result<Vec<Sample>> {
@@ -241,10 +271,19 @@ impl PeakToGeneArgs {
         Ok(())
     }
 
-    /// Every file the run writes: its tables, and the QC report when QC
-    /// runs and one is asked for.
+    /// Every file a run with output prefix `out` writes, whatever its
+    /// flags: its tables and its record.
+    #[must_use]
+    pub fn outputs_of(out: &str) -> Vec<std::path::PathBuf> {
+        let mut made = tables(out);
+        made.push(run_record(out).into());
+        made
+    }
+
+    /// Every file the run writes: its tables, its record, and the QC report
+    /// when QC runs and one is asked for.
     pub fn outputs(&self) -> Vec<std::path::PathBuf> {
-        let mut made = tables(&self.out);
+        let mut made = Self::outputs_of(&self.out);
         if self.qc.to_config().is_some() {
             made.extend(self.qc.qc_report.as_deref().map(Into::into));
         }
@@ -364,7 +403,7 @@ pub fn run_peak_to_gene(args: &PeakToGeneArgs) -> anyhow::Result<()> {
         summary.n_clusters,
         table(&args.out, LINKS)
     );
-    Ok(())
+    write_run_record(&args.out, &samples, args.groups.as_deref(), args.flags())
 }
 
 /// `more`'s cells after `report`'s: the samples' reports as one, of the

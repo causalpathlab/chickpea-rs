@@ -164,10 +164,7 @@ impl Groups {
 
 /// The `annotate.argmax` table a lupin round manifest records, as a path.
 fn argmax_of(manifest: &str) -> anyhow::Result<String> {
-    let text = std::fs::read_to_string(manifest)
-        .map_err(|e| anyhow::anyhow!("reading {manifest}: {e}"))?;
-    let v: serde_json::Value =
-        serde_json::from_str(&text).map_err(|e| anyhow::anyhow!("{manifest} is not JSON: {e}"))?;
+    let v = crate::p2g::record::read_json(manifest)?;
     let rel = v
         .pointer("/annotate/argmax")
         .and_then(|a| a.as_str())
@@ -175,7 +172,7 @@ fn argmax_of(manifest: &str) -> anyhow::Result<String> {
             anyhow::anyhow!("{manifest} has no annotate.argmax: give an annotated lupin round")
         })?;
     let p = Path::new(rel);
-    let dir = Path::new(manifest).parent().unwrap_or(Path::new(""));
+    let dir = crate::p2g::record::folder(manifest);
     Ok(if p.is_absolute() {
         rel.to_string()
     } else {

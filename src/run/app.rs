@@ -8,7 +8,7 @@ use super::{checked, Step, STEPS};
 use crate::tui::{click, wheel, ListHit};
 use crate::tui::{is_run_key, TOOL};
 use legume_mcp::job::{End, Reporter};
-use legume_tui::form::{Form, Kind};
+use legume_tui::form::{Form, Kind, Many};
 use legume_tui::Round;
 use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, MouseEvent};
 use std::cell::RefCell;
@@ -95,7 +95,7 @@ impl App {
         });
         form.fields
             .retain(|f| !step.data.iter().any(|s| s.long() == f.long));
-        let pane = if data.pairs.is_empty() {
+        let pane = if data.shown() && data.pairs.is_empty() {
             Pane::Data
         } else {
             Pane::Form
@@ -177,8 +177,12 @@ impl App {
     }
 
     /// The panes Tab goes through.
-    fn panes(&self) -> Vec<Pane> {
-        let mut v = vec![Pane::Data, Pane::Form];
+    pub(super) fn panes(&self) -> Vec<Pane> {
+        let mut v = Vec::with_capacity(3);
+        if self.data.shown() {
+            v.push(Pane::Data);
+        }
+        v.push(Pane::Form);
         if self.job.is_some() {
             v.push(Pane::Run);
         }
@@ -208,9 +212,10 @@ impl App {
                     self.data.set(f);
                 }
             }
-            Want::Flag(long) => {
-                if let (Some(f), Some(field)) = (files.first(), self.form.get_mut(&long)) {
-                    field.set_text(&crate::tui::shown(f));
+            Want::Flag { long, .. } => {
+                if let Some(field) = self.form.get_mut(&long).filter(|_| !files.is_empty()) {
+                    let shown: Vec<String> = files.iter().map(|f| crate::tui::shown(f)).collect();
+                    field.set_text(&shown.join(" "));
                 }
             }
         }
@@ -337,8 +342,17 @@ impl App {
             Kind::Flag { .. } => f.toggle(),
             Kind::Choice(_) => f.cycle(1),
             Kind::Text if self.files.contains(&f.long) => {
-                let at = (!f.value.trim().is_empty()).then(|| PathBuf::from(f.value.trim()));
-                let want = Want::Flag(f.long.clone());
+                let many = f.many != Many::One;
+                let at = if many {
+                    f.value.split([',', ' ']).find(|v| !v.is_empty())
+                } else {
+                    Some(f.value.trim()).filter(|v| !v.is_empty())
+                };
+                let at = at.map(PathBuf::from);
+                let want = Want::Flag {
+                    long: f.long.clone(),
+                    many,
+                };
                 return self.browse(want, at);
             }
             Kind::Text => self.editing = Some(f.value.clone()),
@@ -610,9 +624,19 @@ mod tests {
         println!("{}", screen(&app));
         key(&mut app, KeyCode::Enter);
         assert!(
-            matches!(&app.pick, Some(p) if p.want == Want::Flag("gene-coords".into())),
+            matches!(&app.pick, Some(p) if p.want == Want::Flag { long: "gene-coords".into(), many: false }),
             "enter on --gene-coords browses"
         );
         println!("{}", screen(&app));
+    }
+
+    #[test]
+    fn a_step_without_count_files_opens_on_its_flags() {
+        let app = App::new(super::super::step("regroup").unwrap(), &[]);
+        assert_eq!(app.pane, Pane::Form);
+        assert_eq!(app.panes(), [Pane::Form]);
+        assert!(app.form.fields.iter().any(|f| &*f.long == "atac"));
+        let shown = screen(&app);
+        assert!(!shown.contains(" data ("), "{shown}");
     }
 }

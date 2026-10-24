@@ -61,8 +61,8 @@ pub const STEPS: &[Step] = &[
             cmd
         },
         outputs: |m| Ok(RegroupArgs::from_arg_matches(m)?.outputs()),
-        inputs: &["run", "groups", "out"],
-        data: &[Side::Atac],
+        inputs: &["run", "groups", "atac", "out"],
+        data: &[],
     },
 ];
 
