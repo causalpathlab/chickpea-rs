@@ -4,7 +4,7 @@
 //! project's records, and read the links a run wrote.
 
 use crate::p2g::workflow::{table, tables, LINKS};
-use crate::p2g::PeakToGeneArgs;
+use crate::p2g::{PeakToGeneArgs, RegroupArgs};
 use anyhow::Context;
 use clap::{Args, FromArgMatches};
 use legume_mcp::cli::{check, describe, settable, to_argv};
@@ -26,37 +26,71 @@ RNA + ATAC data. `p2g_flags` lists peak-to-gene's flags (help, default, \
 choices). `p2g_run` runs it on an RNA and an ATAC count file for the same \
 barcodes, with gene positions from gene_coords (a gene, chr, tss TSV) or \
 gff_file: checked as chickpea parses it, in the background (follow its job \
-with `job_status` / `job_wait`), and never over a run. When it is done, \
+with `job_status` / `job_wait`), and never over a run. A background run \
+goes on `chickpea run`'s screen in a session of its own: tell the user the \
+`chickpea attach` command its status names, which shows it. When it is done, \
 `p2g_links` reads the run's links (gene, peak, distance, abc, gate, corr, \
-score), the best first, for all genes or the ones named.";
+score), the best first, for all genes or the ones named. Per-group links come \
+from chickpea's own Leiden clusters, or from cell types: give p2g_run `groups` \
+(a lupin round's manifest, its argmax table, or a cell, group table), or redo \
+a finished run's groups in minutes with `p2g_regroup`. To look at a run as \
+`chickpea view` does: `view_open` it, then `view_genome` ranks its genes by \
+their links and `view_locus` shows one gene's cis peaks.";
 
 /// The run's own arguments, by clap id, which is also how `p2g_run` names
 /// them: given by name, never as flags.
-const OWN: [&str; 6] = ["rna", "atac", "gene_coords", "gff_file", "batch", "out"];
+const OWN: [&str; 7] = [
+    "rna",
+    "atac",
+    "gene_coords",
+    "gff_file",
+    "batch",
+    "groups",
+    "out",
+];
 
 /// The tools, and peak-to-gene's command line to read the flags from and
 /// check a run against.
 pub struct Server {
     cli: clap::Command,
+    regroup: clap::Command,
+    #[cfg(feature = "tui")]
+    viewer: crate::view::mcp::Viewer,
 }
 
 impl Default for Server {
     fn default() -> Self {
         let mut cli = PeakToGeneArgs::augment_args(clap::Command::new("chickpea peak-to-gene"));
         cli.build();
-        Server { cli }
+        let mut regroup = RegroupArgs::augment_args(clap::Command::new("chickpea regroup"));
+        regroup.build();
+        Server {
+            cli,
+            regroup,
+            #[cfg(feature = "tui")]
+            viewer: Default::default(),
+        }
     }
 }
 
 impl Handler for Server {
     fn tools(&self) -> Vec<ToolSpec> {
-        specs()
+        #[allow(unused_mut)]
+        let mut tools = specs();
+        #[cfg(feature = "tui")]
+        tools.extend(crate::view::mcp::specs());
+        tools
     }
 
     fn call(&mut self, name: &str, args: Value, cx: &Call) -> anyhow::Result<Vec<Content>> {
+        #[cfg(feature = "tui")]
+        if crate::view::mcp::Viewer::answers(name) {
+            return self.viewer.call(name, args, cx);
+        }
         let reply = match name {
             "p2g_flags" => self.flags(),
             "p2g_run" => self.run(parse_args(args)?, cx)?,
+            "p2g_regroup" => self.regroup(parse_args(args)?, cx)?,
             "p2g_links" => links(parse_args(args)?)?,
             _ => unreachable!("the server answers unknown tools itself"),
         };
@@ -89,6 +123,7 @@ impl Server {
         for (flag, path) in inputs
             .into_iter()
             .chain(a.batch.as_ref().map(|b| ("--batch", b)))
+            .chain(a.groups.as_ref().map(|g| ("--groups", g)))
         {
             let path = shown_path(Path::new(path));
             anyhow::ensure!(Path::new(&path).exists(), "{flag} {path} does not exist");
@@ -121,33 +156,177 @@ impl Server {
             .into_iter()
             .chain(argv)
             .collect::<Vec<_>>();
-        let mut cmd = legume_mcp::own_command(&command)?;
-        // Info logs, so a run's progress reaches job_status.
-        if std::env::var_os("RUST_LOG").is_none() {
-            cmd.env("RUST_LOG", "info");
+        launch(cx, &out, &command, &made, &summary, a.background)
+    }
+
+    fn regroup(&self, a: RegroupCall, cx: &Call) -> anyhow::Result<Value> {
+        let mut argv: Vec<String> = Vec::new();
+        let run = crate::p2g::workflow::prefix_of(&shown_path(Path::new(&a.run)));
+        crate::p2g::workflow::trained_run(&run)?;
+        argv.extend(["--run".into(), run.clone()]);
+        for (flag, path) in [("--atac", &a.atac), ("--groups", &a.groups)] {
+            let path = shown_path(Path::new(path));
+            anyhow::ensure!(Path::new(&path).exists(), "{flag} {path} does not exist");
+            argv.extend([flag.into(), path]);
         }
-        let (key, job, note) = if a.background {
-            let job = cx.spawn_job(cmd, &made, &summary)?;
-            let note =
-                format!("job_wait (id {job}) or job_status until it ends, then p2g_links {out}");
-            ("writes", Some(job), note)
-        } else {
-            cx.run_making(cmd, &made, &summary)?;
-            (
-                "written",
-                None,
-                format!("p2g_links {out} to read the links"),
-            )
+        let out = match a.out.as_deref().map(str::trim) {
+            Some(out) if !out.is_empty() => shown_path(Path::new(out)),
+            _ => {
+                let made = |out: &str| Ok(RegroupArgs::outputs_of(out));
+                let name = format!("regroup.{}", groups_name(&a.groups));
+                cx.free_prefix(&name, made, |_| false)
+                    .context("give out, the output prefix")?
+                    .0
+            }
         };
-        let mut reply = json!({
-            "command": format!("chickpea {}", command_line(&command)),
-            "note": note,
-        });
-        reply[key] = made.iter().map(|p| p.to_string_lossy()).collect();
-        if let Some(job) = job {
-            reply["job"] = job.into();
+        argv.extend(["--out".into(), out.clone()]);
+        let made: Vec<PathBuf> = RegroupArgs::from_arg_matches(&check(&self.regroup, &argv)?)?
+            .outputs()
+            .iter()
+            .map(|p| shown_path(p).into())
+            .collect();
+        if let Some(there) = made.iter().find(|p| p.exists()) {
+            anyhow::bail!(
+                "{} exists: a run is not written over; give another out",
+                there.display()
+            );
         }
-        Ok(reply)
+        let summary = format!("{run}'s links regrouped by {}", a.groups);
+        let command = [String::from("regroup")]
+            .into_iter()
+            .chain(argv)
+            .collect::<Vec<_>>();
+        launch(cx, &out, &command, &made, &summary, a.background)
+    }
+}
+
+/// This binary run with `argv`, at info logs unless `RUST_LOG` says
+/// otherwise, so a run's progress reaches whoever follows it.
+pub fn own_command<S: AsRef<std::ffi::OsStr>>(
+    argv: impl IntoIterator<Item = S>,
+) -> anyhow::Result<std::process::Command> {
+    let mut cmd = legume_mcp::own_command(argv)?;
+    if std::env::var_os("RUST_LOG").is_none() {
+        cmd.env("RUST_LOG", "info");
+    }
+    Ok(cmd)
+}
+
+/// Run `chickpea {command}`, which writes `made`, in the project's records:
+/// in the background (see [`background`]) or waiting for it.
+fn launch(
+    cx: &Call,
+    out: &str,
+    command: &[String],
+    made: &[PathBuf],
+    summary: &str,
+    in_background: bool,
+) -> anyhow::Result<Value> {
+    let cmd = own_command(command)?;
+    let mut session: Option<String> = None;
+    let (key, job, note) = if in_background {
+        let job;
+        (job, session) = background(cx, out, command, cmd, made, summary)?;
+        let note = match &session {
+            Some(s) => format!(
+                "it runs on chickpea run's screen in session {s} (`chickpea attach {s}` shows it to the user) and goes on if this server ends; job_wait (id {job}) or job_status until it ends, then p2g_links {out} or view_open {out}"
+            ),
+            None => format!("job_wait (id {job}) or job_status until it ends, then p2g_links {out}"),
+        };
+        ("writes", Some(job), note)
+    } else {
+        cx.run_making(cmd, made, summary)?;
+        (
+            "written",
+            None,
+            format!("p2g_links {out} or view_open {out} to read it"),
+        )
+    };
+    let mut reply = json!({
+        "command": format!("chickpea {}", command_line(command)),
+        "note": note,
+    });
+    reply[key] = made.iter().map(|p| p.to_string_lossy()).collect();
+    if let Some(job) = job {
+        reply["job"] = job.into();
+    }
+    if let Some(s) = session {
+        reply["session"] = s.into();
+    }
+    Ok(reply)
+}
+
+/// A short name for a groups file, for a default out: its file name
+/// without the extensions a labels table or a round has (`X.L1.json` is
+/// `X.L1`, `X.L1.argmax.tsv.gz` too).
+fn groups_name(path: &str) -> String {
+    let mut name = Path::new(path)
+        .file_name()
+        .map_or_else(|| "groups".into(), |n| n.to_string_lossy().into_owned());
+    loop {
+        let before = name.len();
+        for ext in [
+            ".gz", ".json", ".tsv", ".csv", ".txt", ".parquet", ".argmax",
+        ] {
+            if let Some(n) = name.strip_suffix(ext) {
+                name = n.to_string();
+            }
+        }
+        if name.len() == before {
+            break;
+        }
+    }
+    let name: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || "._-".contains(c) {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if name.is_empty() {
+        "groups".into()
+    } else {
+        name
+    }
+}
+
+/// Run `chickpea {command}` in the background: on `chickpea run`'s screen
+/// in a detached session, which a person can attach to and which outlives
+/// this server; where there are no sessions, as a job of this server's
+/// (`record`, the step itself). Its job, and its session if it has one.
+fn background(
+    cx: &Call,
+    out: &str,
+    command: &[String],
+    record: std::process::Command,
+    made: &[PathBuf],
+    summary: &str,
+) -> anyhow::Result<(String, Option<String>)> {
+    #[cfg(all(unix, feature = "tui"))]
+    {
+        let mut watch = legume_mcp::own_command(["run", "--"])?;
+        watch.args(command);
+        let label = Path::new(out)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned());
+        let started = cx.start_session_job(legume_mcp::SessionJob {
+            tool: crate::tui::TOOL,
+            screen: "run".into(),
+            label,
+            watch,
+            record,
+            outputs: made.to_vec(),
+            summary: summary.into(),
+        })?;
+        Ok((started.job, Some(started.session)))
+    }
+    #[cfg(not(all(unix, feature = "tui")))]
+    {
+        let _ = (out, command);
+        Ok((cx.spawn_job(record, made, summary)?, None))
     }
 }
 
@@ -168,16 +347,10 @@ pub fn best_first(scores: &[f64], rows: &mut Vec<usize>, top: usize) {
 
 /// A run's links, the best first: all genes', or those of `genes`.
 fn links(a: LinksArgs) -> anyhow::Result<Value> {
-    let file = if a.out.ends_with(&format!(".{LINKS}.parquet")) {
-        a.out.clone()
-    } else {
-        table(&a.out, LINKS)
-    };
-    let file = shown_path(Path::new(&file));
-    anyhow::ensure!(
-        Path::new(&file).exists(),
-        "{file} does not exist: give the out of a finished p2g_run"
-    );
+    // A regrouped run's links are those of the run it regrouped.
+    let prefix = crate::p2g::workflow::prefix_of(&shown_path(Path::new(&a.out)));
+    let file = table(&crate::p2g::workflow::trained_run(&prefix)?, LINKS);
+    let file = shown_path(&crate::p2g::workflow::tidy(Path::new(&file)));
     let (s, n) = read_table_columns(
         &file,
         &["gene", "peak"],
@@ -236,6 +409,7 @@ struct RunArgs {
     gene_coords: Option<String>,
     gff_file: Option<String>,
     batch: Option<String>,
+    groups: Option<String>,
     out: Option<String>,
     #[serde(default)]
     flags: Map<String, Value>,
@@ -245,6 +419,17 @@ struct RunArgs {
 
 fn in_background() -> bool {
     true
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RegroupCall {
+    run: String,
+    atac: String,
+    groups: String,
+    out: Option<String>,
+    #[serde(default)]
+    background: bool,
 }
 
 #[derive(Deserialize)]
@@ -286,6 +471,7 @@ fn specs() -> Vec<ToolSpec> {
                     "gene_coords": path("Gene TSS table: gene, chr, tss, with a header (this or gff_file)"),
                     "gff_file": path("GFF/GTF annotation for gene TSS (this or gene_coords)"),
                     "batch": path("Batch labels, one per barcode"),
+                    "groups": path("Cell groups for the per-group tables, in place of the Leiden clusters: a lupin round's manifest (.json), its argmax table, or a cell, group table; unassigned cells are in no group"),
                     "out": path("Output prefix: {out}.links.parquet and the rest [default: results/<today>/p2g]"),
                     "flags": {"type": "object", "description": "peak-to-gene's flags by name, as p2g_flags lists them (a switch takes true or false; null leaves a flag at its default): {\"cis-window\": 250000}"},
                     "background": {"type": "boolean", "description": "Run as a background job and return at once [default: true]; false waits for the run"},
@@ -295,10 +481,32 @@ fn specs() -> Vec<ToolSpec> {
             }),
         ),
         ToolSpec::new(
+            "p2g_regroup",
+            "Redo a finished run's per-group tables for other cell groups (a lupin round's \
+             cell types, say) without training it again: a group's link shares need only the \
+             trained gates and the peaks' accessibility in its cells. Writes {out}.groups, \
+             cell_clusters, peak_rates and links_by_cluster, and {out}.regroup.json naming the run \
+             whose links it uses, so out opens as a run of its own (view_open, p2g_links). \
+             It reads the ATAC counts once: minutes; waits unless background.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "run": path("The finished run's out prefix, or one of its tables"),
+                    "atac": path("The run's ATAC peak counts"),
+                    "groups": path("The new groups: a lupin round's manifest (.json, read for annotate.argmax), its argmax table, or a cell, group table"),
+                    "out": path("Output prefix for the regrouped run [default: results/<today>/regroup.{groups' name}]"),
+                    "background": {"type": "boolean", "description": "Run as a background job and return at once [default: false]"},
+                },
+                "required": ["run", "atac", "groups"],
+                "additionalProperties": false,
+            }),
+        ),
+        ToolSpec::new(
             "p2g_links",
             "A finished run's peak-to-gene links, highest score first: gene, peak, distance \
              (bp, peak midpoint to TSS), abc (contact prior share), gate (the gene's share of \
-             the pair), corr (evidence across pseudobulks) and score (gate × corr). With genes, \
+             the pair), corr (the correlation across pseudobulks of the gene's score and its peak's \
+             ATAC module's, so peaks of one module share it) and score (gate × corr). With genes, \
              only theirs. Also the number of pairs in the run and of those matched.",
             json!({
                 "type": "object",
@@ -312,4 +520,16 @@ fn specs() -> Vec<ToolSpec> {
             }),
         ),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_groups_file_names_its_regroup() {
+        assert_eq!(groups_name("lupin/X.L1.json"), "X.L1");
+        assert_eq!(groups_name("X.L1.argmax.tsv.gz"), "X.L1");
+        assert_eq!(groups_name("my groups.csv"), "my_groups");
+    }
 }

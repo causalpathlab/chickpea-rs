@@ -74,7 +74,9 @@ enum Commands {
                       pulled toward it (--align-weight), so genes and peaks share\n\
                       one feature space.\n\
                       A link's score is its gate times the correlation across\n\
-                      pseudobulks of the peak module's score and the gene's.\n\
+                      pseudobulks of the peak module's score and the gene's (so\n\
+                      peaks of one ATAC module share a corr; --peak-modules sets\n\
+                      how finely).\n\
                       \n\
                       {out}.links.parquet has gene, peak, distance, abc, gate,\n\
                       corr and score (gate × corr).\n\
@@ -84,6 +86,27 @@ enum Commands {
         aliases = ["p2g", "peak2gene"]
     )]
     PeakToGene(Box<p2g::PeakToGeneArgs>),
+
+    /// A finished run's per-group tables again, for other cell groups
+    #[command(
+        long_about = "A finished run's per-group tables again, for other cell groups.\n\
+                      \n\
+                      A group's link shares need only the trained gates (in\n\
+                      {run}.links.parquet) and the peaks' accessibility in its cells,\n\
+                      so the run is not trained again: a lupin round's cell types\n\
+                      take the place of the Leiden clusters in minutes.\n\
+                      \n\
+                      Writes {out}.groups, cell_clusters, peak_rates and\n\
+                      links_by_cluster, and {out}.regroup.json, which names the run\n\
+                      whose links it uses, so {out} opens as a run of its own\n\
+                      (chickpea view {out}) without copying them.\n\
+                      \n\
+                      Example:\n\
+                      \x20 chickpea regroup --run out/p2g --atac atac.zarr \\\n\
+                      \x20     --groups lupin/X.L2.json -o out/p2g.L2",
+        after_long_help = ENV_HELP
+    )]
+    Regroup(p2g::RegroupArgs),
 
     /// Server for agents (Model Context Protocol on stdio)
     #[command(
@@ -100,9 +123,88 @@ enum Commands {
                       \x20 codex mcp add chickpea -- chickpea mcp"
     )]
     Mcp,
+
+    /// Set up a step in the terminal and run it
+    #[cfg(feature = "tui")]
+    #[command(long_about = format!(
+        "Set up a chickpea step in the terminal and run it.\n\n\
+         Every flag of the step is a row of the form, with its help; enter\n\
+         changes the row under the cursor, d puts it back to its default.\n\
+         The command line the form stands for is shown at the foot, checked\n\
+         as chickpea parses it. ctrl+r runs it, with its log and progress on\n\
+         screen; a run is never written over an existing one. x stops it.\n\n\
+         A step given after `--` runs at once:\n\
+         \x20 chickpea run -- peak-to-gene --rna r.zarr --atac a.zarr \\\n\
+         \x20     --gene-coords g.tsv -o out/p2g\n\
+         This is how `p2g_run` on `chickpea mcp` runs in the background.\n\n\
+         {}",
+        legume_tui::cli::session_help(
+            &chickpea::tui::TOOL,
+            legume_tui::cli::SessionHelp::new()
+                .what_goes_on("the run goes on")
+                .resume_hint(Some("`chickpea run` with no step"))
+                .more("The keys in effect are listed at the foot of the screen.")
+        )
+    ))]
+    Run(chickpea::run::RunArgs),
+
+    /// Look at a run's links, genome-wide and at a gene's locus
+    #[cfg(feature = "tui")]
+    #[command(long_about = format!(
+        "Look at a finished peak-to-gene run's links.\n\n\
+         Genes are ranked by their links, one number each (their best link,\n\
+         or how many reach a cutoff), by score, gate, corr or abc; the gene\n\
+         under the cursor shows its cis candidates.\n\n\
+         Examples:\n\
+         \x20 chickpea view out/p2g\n\
+         \x20 chickpea view out/p2g.links.parquet --gene GATA1\n\n\
+         {}",
+        legume_tui::cli::session_help(
+            &chickpea::tui::TOOL,
+            legume_tui::cli::SessionHelp::new()
+                .more("The keys in effect are listed at the foot of the screen.")
+        )
+    ))]
+    View(Box<chickpea::view::ViewArgs>),
+
+    #[cfg(feature = "tui")]
+    #[command(
+        about = "Return to a detached `chickpea run` or `chickpea view`",
+        long_about = legume_tui::cli::about(&chickpea::tui::TOOL, "q in it").attach
+    )]
+    Attach(legume_tui::cli::AttachArgs),
+
+    #[cfg(feature = "tui")]
+    #[command(
+        about = "List the live `chickpea run` and `chickpea view` sessions",
+        long_about = legume_tui::cli::about(&chickpea::tui::TOOL, "q in it").sessions
+    )]
+    Sessions,
+
+    #[cfg(feature = "tui")]
+    #[command(
+        about = "Stop a `chickpea run` or `chickpea view` session",
+        long_about = format!(
+            "{}\n\n`chickpea run` stops the run it is running first.",
+            legume_tui::cli::about(&chickpea::tui::TOOL, "q in it").kill
+        )
+    )]
+    Kill(legume_tui::cli::KillArgs),
+
+    #[cfg(feature = "tui")]
+    #[command(
+        about = "Give a `chickpea run` or `chickpea view` session a label",
+        long_about = legume_tui::cli::about(&chickpea::tui::TOOL, "q in it").rename
+    )]
+    Rename(legume_tui::cli::RenameArgs),
 }
 
 fn main() -> anyhow::Result<()> {
+    // A session's host runs this binary again: it serves the session and
+    // exits here, before any of chickpea's own work.
+    #[cfg(feature = "tui")]
+    legume_tui::serve_if_host();
+
     if std::env::args().any(|arg| arg == "--help" || arg == "-h") {
         print_logo();
     }
@@ -115,6 +217,7 @@ fn main() -> anyhow::Result<()> {
 
     match &cli.commands {
         Commands::PeakToGene(args) => p2g::run_peak_to_gene(args),
+        Commands::Regroup(args) => p2g::run_regroup(args),
         Commands::Mcp => legume_mcp::serve_in_project(
             legume_mcp::ServerInfo {
                 name: mcp::SERVER.into(),
@@ -123,5 +226,17 @@ fn main() -> anyhow::Result<()> {
             },
             mcp::Server::default(),
         ),
+        #[cfg(feature = "tui")]
+        Commands::Run(args) => chickpea::run::app::run(args),
+        #[cfg(feature = "tui")]
+        Commands::View(args) => chickpea::view::run_view(args),
+        #[cfg(feature = "tui")]
+        Commands::Attach(args) => Ok(legume_tui::cli::attach(&chickpea::tui::TOOL, args)?),
+        #[cfg(feature = "tui")]
+        Commands::Sessions => Ok(legume_tui::cli::sessions(&chickpea::tui::TOOL)?),
+        #[cfg(feature = "tui")]
+        Commands::Kill(args) => Ok(legume_tui::cli::kill(&chickpea::tui::TOOL, args)?),
+        #[cfg(feature = "tui")]
+        Commands::Rename(args) => Ok(legume_tui::cli::rename(&chickpea::tui::TOOL, args)?),
     }
 }

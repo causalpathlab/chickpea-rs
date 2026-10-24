@@ -4,3 +4,9 @@
 pub mod common;
 pub mod mcp;
 pub mod p2g;
+#[cfg(feature = "tui")]
+pub mod run;
+#[cfg(feature = "tui")]
+pub mod tui;
+#[cfg(feature = "tui")]
+pub mod view;

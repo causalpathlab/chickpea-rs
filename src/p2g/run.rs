@@ -153,6 +153,20 @@ pub struct PeakToGeneArgs {
     )]
     n_clusters: Option<usize>,
 
+    #[arg(
+        long,
+        conflicts_with = "n_clusters",
+        help = "Cell groups in place of the Leiden clusters: a lupin round, or a cell, group table",
+        long_help = "Cell groups in place of the Leiden clusters, for the per-group\n\
+                     tables: a lupin round's manifest (.json, read for its\n\
+                     annotate.argmax), its argmax table, or any table of cell and\n\
+                     cell_type (or group) columns. Unassigned cells and cells it\n\
+                     does not name are in no group; a cell is matched by name or\n\
+                     by its barcode before '@'. `chickpea regroup` redoes the\n\
+                     groups of a finished run without training it again."
+    )]
+    groups: Option<Box<str>>,
+
     #[arg(long, default_value_t = 42, help = "Random seed")]
     seed: u64,
 
@@ -174,6 +188,12 @@ impl PeakToGeneArgs {
 
 pub fn run_peak_to_gene(args: &PeakToGeneArgs) -> anyhow::Result<()> {
     mkdir_parent(&args.out)?;
+    // Read before the hours of training, so a wrong file fails at once.
+    let groups = args
+        .groups
+        .as_deref()
+        .map(crate::p2g::groups::Groups::read)
+        .transpose()?;
 
     let rna = open_sparse_matrix_by_path(&args.rna)?;
     let gene_names = rna.row_names()?;
@@ -242,11 +262,12 @@ pub fn run_peak_to_gene(args: &PeakToGeneArgs) -> anyhow::Result<()> {
             device_no: args.device_no,
         },
         n_clusters: args.n_clusters,
+        groups,
         ..LinkConfig::default()
     };
     let summary = run_links(&input, &cfg, keep.as_ref())?;
     info!(
-        "Done: {} genes, {} peaks, {} cis pairs, {} clusters → {}",
+        "Done: {} genes, {} peaks, {} cis pairs, {} groups → {}",
         summary.n_genes,
         summary.n_peaks,
         summary.n_pairs,
