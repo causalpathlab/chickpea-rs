@@ -1,6 +1,3 @@
-#![allow(dead_code)]
-#![allow(unused_imports)]
-
 pub use log::info;
 pub use std::sync::Arc;
 

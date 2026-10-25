@@ -611,7 +611,7 @@ pub fn write_links_by_cluster(
     w: &[f32],
     lambda: &DMatrix<f32>,
 ) -> anyhow::Result<()> {
-    // Integer indices — not gene/peak name strings — so a genome-scale
+    // Integer indices, not gene/peak name strings, so a genome-scale
     // pair×cluster table stays in the hundreds of MB, not tens of GB.
     let (mut g_i, mut p_i, mut k_i) = (Vec::<i32>::new(), Vec::<i32>::new(), Vec::<i32>::new());
     let (mut a_c, mut b_c) = (Vec::<f32>::new(), Vec::<f32>::new());

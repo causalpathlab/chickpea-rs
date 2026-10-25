@@ -390,7 +390,7 @@ fn draw(f: &mut Frame, s: &mut Screen) {
         Summary::Count(c) => format!("links ≥ {c}"),
     };
     let title = format!(
-        "chickpea view · {} — {} genes, {} pairs · {} by {how}",
+        "chickpea view · {}: {} genes, {} pairs · {} by {how}",
         run.prefix,
         run.genes.len(),
         run.n_pairs(),
@@ -512,7 +512,7 @@ fn locus(f: &mut Frame, s: &Screen, area: Rect, look: &Look) {
         None => String::new(),
     };
     let title = format!(
-        " {} —{place} · {} candidates, by {} ",
+        " {}{place} · {} candidates, by {} ",
         run.genes[g],
         links.len(),
         m.name()

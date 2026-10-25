@@ -33,9 +33,8 @@ fn print_logo() {
 #[derive(Parser, Debug)]
 #[command(
     version,
-    about = "chickpea —\n\
-             peak-to-gene cis-regulatory linkage for paired single-cell RNA + ATAC",
-    long_about = "chickpea — peak-to-gene cis-regulatory linkage\n\
+    about = "chickpea: peak-to-gene cis-regulatory linkage for paired single-cell RNA + ATAC",
+    long_about = "chickpea: peak-to-gene cis-regulatory linkage\n\
                   \n\
                   Links ATAC peaks to RNA genes in paired single-cell RNA + ATAC data.\n\
                   Peaks become gene features: each gene gets an ATAC track,\n\
@@ -177,8 +176,8 @@ enum Commands {
          click to its locus.\n\n\
          Examples:\n\
          \x20 chickpea view out/p2g\n\
-         \x20 chickpea view out/p2g.links.parquet --gene GATA1\n\
-         \x20 chickpea view out/p2g --gene GATA1 --pdf gata1.pdf\n\
+         \x20 chickpea view out/p2g.links.parquet --gene GENE1\n\
+         \x20 chickpea view out/p2g --gene GENE1 --pdf gene1.pdf\n\
          \x20 chickpea view out/p2g --genome --summary count --text 120\n\n\
          {}",
         legume_tui::cli::session_help(

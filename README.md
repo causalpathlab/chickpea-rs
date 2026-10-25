@@ -128,10 +128,10 @@ them; `--atac` gives a file that has moved, matched to its sample by name.
 `chickpea run` sets up a step on a terminal screen and runs it with its log
 on screen: the count files on a data pane, a row per sample, picked in a file
 browser (space marks several; each is told RNA, ATAC or both and paired by
-name),
-and the other flags as a form, with the mouse as well as the keys; `chickpea view out/p2g` ranks genes by their links, genome-wide, and
-draws a gene's locus (arcs over each group's accessibility). `--pdf`, `--png`
-and `--text` write either figure without the screen. Both run as detachable
+name), and the other flags as a form, with the mouse as well as the keys.
+`chickpea view out/p2g` ranks genes by their links, genome-wide, and draws a
+gene's locus (arcs over each group's accessibility); `--pdf`, `--png` and
+`--text` write either figure without the screen. Both run as detachable
 sessions (`chickpea attach`, `sessions`, `kill`, `rename`).
 
 ### Agents (MCP)
@@ -192,3 +192,9 @@ cargo install chickpea-rs --features metal   # macOS
 cargo install chickpea-rs --features cuda    # Linux with CUDA
 cargo install chickpea-rs --features hdf5
 ```
+
+The terminal screens and their sessions (`run`, `view`, `attach`,
+`sessions`, `kill`, `rename`) and the `view_*` MCP tools are the default
+`tui` feature; `--no-default-features` builds without them (`chickpea mcp`
+then serves the `p2g_*` tools alone, and a `p2g_run` job has no screen to
+watch).

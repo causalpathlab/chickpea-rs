@@ -156,8 +156,8 @@ pub struct PeakToGeneArgs {
         default_value_t = 1e-4,
         help = "L2 weight decay on the gene and peak embeddings",
         long_help = "L2 weight decay on the gene and peak embeddings.\n\
-                     Every feature row a phase-1 step touches — each modality's\n\
-                     module and gene rows — shrinks by 1 − lr·wd before its\n\
+                     Every feature row a phase-1 step touches (each modality's\n\
+                     module and gene rows) shrinks by 1 − lr·wd before its\n\
                      update, so directions the data never pins down decay.\n\
                      The pseudobulk rows and biases never decay. 0 turns it off."
     )]

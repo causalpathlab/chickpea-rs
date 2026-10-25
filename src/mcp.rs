@@ -79,11 +79,10 @@ impl Default for Server {
 
 impl Handler for Server {
     fn tools(&self) -> Vec<ToolSpec> {
-        #[allow(unused_mut)]
-        let mut tools = specs();
         #[cfg(feature = "tui")]
-        tools.extend(crate::view::mcp::specs());
-        tools
+        return [specs(), crate::view::mcp::specs()].concat();
+        #[cfg(not(feature = "tui"))]
+        specs()
     }
 
     fn call(&mut self, name: &str, args: Value, cx: &Call) -> anyhow::Result<Vec<Content>> {
