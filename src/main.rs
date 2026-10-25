@@ -169,8 +169,10 @@ enum Commands {
          Genes are ranked by their links, one number each (their best link,\n\
          or how many reach a cutoff), by score, gate, corr or abc, and drawn\n\
          genome-wide at their TSS; a gene's locus shows its cis candidates,\n\
-         as arcs over each cell group's accessibility. Either figure is\n\
-         written as PDF or PNG (--pdf, --png) or printed as text (--text).\n\
+         as arcs over each cell group's accessibility, or as straight lines\n\
+         from its peaks to its TSS (--layout bipartite). Either\n\
+         figure is written as PDF or PNG (--pdf, --png) or printed as text\n\
+         (--text), where a locus is a grid of its peaks by cell group.\n\
          On the screen, the wheel moves through the genes over their list and\n\
          zooms over the figure; a click on a gene goes to it, and a second\n\
          click to its locus.\n\n\

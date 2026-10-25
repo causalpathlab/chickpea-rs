@@ -9,7 +9,7 @@ use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 /// A running `chickpea mcp`, keeping its records under `project`. It runs
 /// in a folder of its own, so a relative path that resolved against its
 /// working directory rather than the project would land elsewhere.
-struct Session {
+pub(crate) struct Session {
     _cwd: Option<tempfile::TempDir>,
     child: Child,
     stdin: ChildStdin,
@@ -18,7 +18,7 @@ struct Session {
 }
 
 impl Session {
-    fn start(project: &Path) -> Self {
+    pub(crate) fn start(project: &Path) -> Self {
         let cwd = tempfile::tempdir().unwrap();
         let path = cwd.path().to_path_buf();
         Self::start_in(&path, project, Some(cwd))
@@ -98,7 +98,7 @@ impl Session {
     }
 
     /// A tool's structured result, or its error text.
-    fn call(&mut self, name: &str, args: Value) -> Result<Value, String> {
+    pub(crate) fn call(&mut self, name: &str, args: Value) -> Result<Value, String> {
         let r = self.request("tools/call", json!({"name": name, "arguments": args}));
         if r["isError"] == true {
             Err(r["content"][0]["text"].as_str().unwrap_or_default().into())

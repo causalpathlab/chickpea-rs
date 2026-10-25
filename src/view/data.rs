@@ -29,14 +29,15 @@ pub enum Measure {
 impl Measure {
     pub const ALL: [Measure; 4] = [Measure::Score, Measure::Gate, Measure::Corr, Measure::Abc];
 
-    /// What a locus figure's arcs show by it.
+    /// What a locus figure's links show by it (each caller says whether it
+    /// is a row's own: corr is not a share of anything).
     #[must_use]
-    pub fn arcs(self) -> &'static str {
+    pub fn shown(self) -> &'static str {
         match self {
-            Measure::Corr => "arcs: corr, where the peak is open",
-            Measure::Abc => "arcs: ABC prior × accessibility",
-            Measure::Gate => "arcs: gate × accessibility",
-            Measure::Score => "arcs: gate × accessibility × corr",
+            Measure::Corr => "corr, where the peak is open",
+            Measure::Abc => "ABC prior × accessibility",
+            Measure::Gate => "gate × accessibility",
+            Measure::Score => "gate × accessibility × corr",
         }
     }
 
@@ -279,6 +280,9 @@ pub struct Row {
     /// Each peak in the window's accessibility in this row, in
     /// [`Locus::peaks`] order.
     pub rate: Vec<f32>,
+    /// The gene's ATAC side in this row: all its candidates' accessibility
+    /// pooled through their gates (their ABC prior, by abc).
+    pub activity: f32,
 }
 
 /// A gene's locus, as the figure draws it.
@@ -298,6 +302,60 @@ pub struct Locus {
     pub rows: Vec<Row>,
     /// Placed genes with their TSS in the window, the gene itself included.
     pub genes: Vec<(Box<str>, i64)>,
+    /// The linked genes before and after it along the chromosome, as
+    /// [`Run::neighbour`] steps to them.
+    pub steps: [Option<Box<str>>; 2],
+}
+
+#[cfg(test)]
+impl Locus {
+    /// GENE1 at 50 kb on chr1, in a window from 0 to 100 kb, for tests:
+    /// `links` as `(peak, start, score)` (a 500 bp peak, its gate and ABC
+    /// prior the score, its corr 1), and `rows` as `(label, each link's
+    /// value)`, each of 10 cells and activity 1.
+    pub fn for_tests(links: &[(&str, i64, f32)], rows: &[(&str, &[f32])]) -> Self {
+        let tss = 50_000;
+        Locus {
+            gene: "GENE1".into(),
+            tss: Tss {
+                chr: "chr1".into(),
+                tss,
+                inferred: false,
+            },
+            lo: 0,
+            hi: 100_000,
+            measure: Measure::Score,
+            links: links
+                .iter()
+                .map(|&(peak, start, score)| Link {
+                    peak: peak.into(),
+                    place: Some(Place {
+                        chr: "chr1".into(),
+                        start,
+                        end: start + 500,
+                    }),
+                    distance: (start + 250 - tss).abs(),
+                    score,
+                    gate: score,
+                    corr: 1.0,
+                    abc: score,
+                })
+                .collect(),
+            peaks: Vec::new(),
+            rows: rows
+                .iter()
+                .map(|&(label, value)| Row {
+                    label: label.into(),
+                    cells: Some(10),
+                    value: value.to_vec(),
+                    rate: Vec::new(),
+                    activity: 1.0,
+                })
+                .collect(),
+            genes: vec![("GENE1".into(), tss)],
+            steps: [None, None],
+        }
+    }
 }
 
 pub use crate::p2g::workflow::prefix_of;
@@ -594,11 +652,6 @@ impl Run {
                 .collect()
         });
 
-        let weight = if m == Measure::Abc {
-            &self.abc
-        } else {
-            &self.gate
-        };
         let n_rows = 1 + self.rates.as_ref().map_or(0, |r| r.clusters.len());
         let rows = (0..n_rows)
             .map(|r| {
@@ -612,35 +665,15 @@ impl Run {
                         self.cluster_sizes.get(r - 1).copied(),
                     ),
                 };
-                let rate_of = |p: u32| self.rates.as_ref().map_or(1.0, |rt| rt.get(p, r));
-                // Over all the gene's candidates, not only those in sight.
-                let total: f32 = rows_of_g
-                    .clone()
-                    .map(|k| weight[k] * rate_of(self.link_peak[k]))
-                    .sum();
-                let value = shown
-                    .iter()
-                    .map(|&k| {
-                        let open = rate_of(self.link_peak[k]);
-                        let share = if total > 0.0 {
-                            weight[k] * open / total
-                        } else {
-                            0.0
-                        };
-                        match m {
-                            Measure::Score => share * self.corr[k],
-                            Measure::Gate | Measure::Abc => share,
-                            Measure::Corr if open > 0.0 => self.corr[k],
-                            Measure::Corr => 0.0,
-                        }
-                    })
-                    .collect();
-                let rate = peaks.iter().map(|&p| rate_of(p)).collect();
+                let activity = self.activity(g, m, r);
+                let value = self.values(&shown, m, r, activity);
+                let rate = peaks.iter().map(|&p| self.rate(p, r)).collect();
                 Row {
                     label,
                     cells,
                     value,
                     rate,
+                    activity,
                 }
             })
             .collect();
@@ -662,7 +695,59 @@ impl Run {
                 .collect(),
             rows,
             genes,
+            steps: [-1, 1].map(|by| self.neighbour(g, by).map(|o| self.genes[o].clone())),
         })
+    }
+
+    /// Peak `p`'s accessibility in row `r` of a locus (0 all the cells,
+    /// `k + 1` group `k`); 1 where the run kept none.
+    fn rate(&self, p: u32, r: usize) -> f32 {
+        self.rates.as_ref().map_or(1.0, |rt| rt.get(p, r))
+    }
+
+    /// The weights a gene's links pool its peaks by: their ABC prior by
+    /// abc, else their gates.
+    fn weight(&self, m: Measure) -> &[f32] {
+        if m == Measure::Abc {
+            &self.abc
+        } else {
+            &self.gate
+        }
+    }
+
+    /// Gene `g`'s candidates' accessibility in row `r`, pooled through
+    /// [`Run::weight`]: the gene's ATAC side there.
+    fn activity(&self, g: usize, m: Measure, r: usize) -> f32 {
+        let weight = self.weight(m);
+        self.by_gene[g]
+            .clone()
+            .map(|k| weight[k] * self.rate(self.link_peak[k], r))
+            .sum()
+    }
+
+    /// A gene's links `shown` (rows of the link columns), valued by `m` in
+    /// row `r`: each one's share of `total`, the gene's [`Run::activity`]
+    /// over all its candidates, not only those shown, so a link's value
+    /// does not change with the window.
+    fn values(&self, shown: &[usize], m: Measure, r: usize, total: f32) -> Vec<f32> {
+        let weight = self.weight(m);
+        shown
+            .iter()
+            .map(|&k| {
+                let open = self.rate(self.link_peak[k], r);
+                let share = if total > 0.0 {
+                    weight[k] * open / total
+                } else {
+                    0.0
+                };
+                match m {
+                    Measure::Score => share * self.corr[k],
+                    Measure::Gate | Measure::Abc => share,
+                    Measure::Corr if open > 0.0 => self.corr[k],
+                    Measure::Corr => 0.0,
+                }
+            })
+            .collect()
     }
 
     /// The groups, from `groups` (named) or, for runs before it,
@@ -791,6 +876,33 @@ impl Run {
             gate: self.gate[r],
             corr: self.corr[r],
             abc: self.abc[r],
+        }
+    }
+
+    /// The linked gene next to `g` along its chromosome by TSS, `step` of
+    /// them on (back when negative); genes without links are stepped over.
+    #[must_use]
+    pub fn neighbour(&self, g: usize, step: isize) -> Option<usize> {
+        let tss = self.tss[g].as_ref()?;
+        let along = &self.by_chr.get(chr_stripped(&tss.chr))?.genes;
+        // The gene among the chromosome's, by TSS (those at the same TSS
+        // by name), then the linked ones from there.
+        let from = along.partition_point(|&i| self.placed[i].1.tss < tss.tss);
+        let at = from
+            + along[from..]
+                .iter()
+                .position(|&i| self.placed[i].0 == self.genes[g])?;
+        let linked = |&i: &usize| {
+            self.gene_of
+                .get(&self.placed[i].0)
+                .copied()
+                .filter(|&o| o != g && !self.by_gene[o].is_empty())
+        };
+        let n = step.unsigned_abs().checked_sub(1)?;
+        if step > 0 {
+            along[at + 1..].iter().filter_map(linked).nth(n)
+        } else {
+            along[..at].iter().rev().filter_map(linked).nth(n)
         }
     }
 

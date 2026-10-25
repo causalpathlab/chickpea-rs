@@ -24,6 +24,16 @@ struct Drawn {
     figure: Rect,
 }
 
+/// How long after a sideways scroll another is the same swipe.
+const SWIPE: std::time::Duration = std::time::Duration::from_millis(300);
+
+/// Whether a sideways scroll at `now` starts a swipe of its own, the last
+/// one having come at `last`: the events of one swipe come closer than
+/// [`SWIPE`] apart.
+fn new_swipe(last: Option<std::time::Instant>, now: std::time::Instant) -> bool {
+    last.is_none_or(|t| now.saturating_duration_since(t) >= SWIPE)
+}
+
 struct Screen {
     /// The right pane shows the genome-wide view (else the locus).
     genome: bool,
@@ -51,6 +61,9 @@ struct Screen {
     /// Where the last draw put the gene list's rows (and the first gene
     /// shown) and the right pane, for the mouse.
     drawn: Drawn,
+    /// When a sideways scroll last stepped to a gene: a swipe sends many,
+    /// and steps once.
+    stepped: Option<std::time::Instant>,
 }
 
 impl Screen {
@@ -68,6 +81,7 @@ impl Screen {
             note: None,
             quit: false,
             drawn: Drawn::default(),
+            stepped: None,
             state,
         };
         s.rank();
@@ -76,11 +90,11 @@ impl Screen {
     }
 
     fn rank(&mut self) {
-        let keep = self.state.gene;
+        let keep = self.state.settings.gene;
         self.ranked = self
             .state
             .run
-            .ranked(self.state.measure, self.state.summary);
+            .ranked(self.state.settings.measure, self.state.settings.summary);
         if let Some(g) = keep {
             self.at = self.ranked.iter().position(|&(i, _)| i == g).unwrap_or(0);
         }
@@ -97,34 +111,52 @@ impl Screen {
         self.text = half_blocks(self.picker.as_ref());
     }
 
+    /// Move to the linked gene `by` along the chromosome from the one
+    /// shown, keeping the list's cursor on it.
+    fn step_gene(&mut self, by: isize) {
+        let next = self
+            .state
+            .settings
+            .gene
+            .and_then(|g| self.state.run.neighbour(g, by));
+        match next.and_then(|n| self.ranked.iter().position(|&(i, _)| i == n)) {
+            Some(i) => {
+                self.at = i;
+                self.note = None;
+            }
+            None => self.note = Some("no linked gene further that way on the chromosome".into()),
+        }
+    }
+
     /// The locus, and the gene ringed genome-wide, follow the cursor.
     fn follow(&mut self) {
-        self.state.gene = self.ranked.get(self.at).map(|&(g, _)| g);
-        self.state.genome_view.focus = self.state.gene;
+        self.state.settings.gene = self.ranked.get(self.at).map(|&(g, _)| g);
+        self.state.settings.genome_view.focus = self.state.settings.gene;
     }
 
     /// Zoom the genome-wide view by `by` (< 1 in), about the gene in focus
     /// when it is in sight, else about the middle.
     fn zoom_genome(&mut self, by: f32) {
-        let (from, span) = self.state.genome_view.window();
+        let (from, span) = self.state.settings.genome_view.window();
         let g = self.state.genome();
         let len = g.len().max(1) as f32;
         let at = self
             .state
+            .settings
             .gene
             .and_then(|f| g.points.iter().find(|p| p.0 == f))
             .map(|p| p.1 as f32 / len)
             .filter(|t| *t >= from && *t <= from + span)
             .unwrap_or(from + span / 2.0);
         let span = (span * by).clamp(1e-4, 1.0);
-        self.state.genome_view.span = span;
-        self.state.genome_view.from = (at - span / 2.0).clamp(0.0, 1.0 - span);
+        self.state.settings.genome_view.span = span;
+        self.state.settings.genome_view.from = (at - span / 2.0).clamp(0.0, 1.0 - span);
     }
 
     /// Move the genome-wide view by `by` of its width.
     fn pan_genome(&mut self, by: f32) {
-        let (from, span) = self.state.genome_view.window();
-        self.state.genome_view.from = (from + by * span).clamp(0.0, 1.0 - span);
+        let (from, span) = self.state.settings.genome_view.window();
+        self.state.settings.genome_view.from = (from + by * span).clamp(0.0, 1.0 - span);
     }
 
     /// The wheel moves through the genes over their list and zooms over
@@ -136,6 +168,23 @@ impl Screen {
         }
         let on_list = self.drawn.genes.row_at(m.column, m.row);
         let on_figure = self.drawn.figure.contains((m.column, m.row).into());
+        if on_figure && !self.genome {
+            use ratatui::crossterm::event::MouseEventKind;
+            let by = match m.kind {
+                MouseEventKind::ScrollLeft => Some(-1),
+                MouseEventKind::ScrollRight => Some(1),
+                _ => None,
+            };
+            if let Some(by) = by {
+                let now = std::time::Instant::now();
+                if new_swipe(self.stepped, now) {
+                    self.step_gene(by);
+                    self.follow();
+                }
+                self.stepped = Some(now);
+                return;
+            }
+        }
         match (wheel(&m), on_list) {
             // Over the list, as the arrow keys.
             (Some(d), Some(_)) => {
@@ -204,12 +253,23 @@ impl Screen {
                 let all = Measure::ALL;
                 let i = all
                     .iter()
-                    .position(|&m| m == self.state.measure)
+                    .position(|&m| m == self.state.settings.measure)
                     .unwrap_or(0);
-                self.state.measure = all[(i + 1) % all.len()];
+                self.state.settings.measure = all[(i + 1) % all.len()];
                 self.rank();
             }
             KeyCode::Char('f') => self.figure = !self.figure,
+            KeyCode::Char('b') if !self.genome => {
+                let style = &mut self.state.settings.style;
+                style.layout = style.layout.next();
+                let about = style.layout.about();
+                // The text figure is a grid in either layout.
+                self.note = Some(if self.text {
+                    format!("{about}, in a picture (text is a grid)")
+                } else {
+                    about.into()
+                });
+            }
             KeyCode::Char('g') => {
                 self.text = !self.text;
                 self.note = Some(
@@ -228,14 +288,16 @@ impl Screen {
             KeyCode::Left | KeyCode::Char('h') if self.genome => self.pan_genome(-0.5),
             KeyCode::Right | KeyCode::Char('l') if self.genome => self.pan_genome(0.5),
             KeyCode::Char('0') if self.genome => {
-                self.state.genome_view.from = 0.0;
-                self.state.genome_view.span = 1.0;
+                self.state.settings.genome_view.from = 0.0;
+                self.state.settings.genome_view.span = 1.0;
             }
+            KeyCode::Left | KeyCode::Char('h') => self.step_gene(-1),
+            KeyCode::Right | KeyCode::Char('l') => self.step_gene(1),
             KeyCode::Char('[') => self.zoom(0.5),
             KeyCode::Char(']') => self.zoom(2.0),
-            KeyCode::Char('0') => self.state.half_window = None,
+            KeyCode::Char('0') => self.state.settings.half_window = None,
             KeyCode::Char('c') => {
-                let c = &mut self.state.style.cutoff;
+                let c = &mut self.state.settings.style.cutoff;
                 *c = match *c {
                     x if x < 0.01 => 0.05,
                     x if x < 0.1 => 0.2,
@@ -243,12 +305,12 @@ impl Screen {
                 };
                 self.note = Some(format!(
                     "links ≥ {} of the strongest",
-                    self.state.style.cutoff
+                    self.state.settings.style.cutoff
                 ));
             }
             KeyCode::Char('e') => self.export(),
             KeyCode::Char('s') => {
-                self.state.summary = match self.state.summary {
+                self.state.settings.summary = match self.state.settings.summary {
                     Summary::Best => Summary::Count(super::data::COUNT_CUTOFF),
                     Summary::Count(_) => Summary::Best,
                 };
@@ -264,24 +326,14 @@ impl Screen {
 #[derive(Clone, Debug, PartialEq)]
 struct Key {
     genome: bool,
-    gene: Option<usize>,
-    measure: Measure,
-    summary: Summary,
-    half: Option<i64>,
-    style: super::figure::Style,
-    view: super::figure::GenomeView,
+    settings: super::Settings,
 }
 
 impl Screen {
     fn key_now(&self) -> Key {
         Key {
             genome: self.genome,
-            gene: self.state.gene,
-            measure: self.state.measure,
-            summary: self.state.summary,
-            half: self.state.half_window,
-            style: self.state.style.clone(),
-            view: self.state.genome_view.clone(),
+            settings: self.state.settings.clone(),
         }
     }
 
@@ -289,16 +341,17 @@ impl Screen {
     fn zoom(&mut self, by: f32) {
         let now = self
             .state
+            .settings
             .half_window
             .or_else(|| self.state.locus().map(|l| (l.hi - l.lo) / 2))
             .unwrap_or(100_000);
-        self.state.half_window = Some(((now as f32 * by) as i64).clamp(1_000, 5_000_000));
+        self.state.settings.half_window = Some(((now as f32 * by) as i64).clamp(1_000, 5_000_000));
     }
 
     /// The figure shown as a PDF beside the run: `{run}.{gene}.locus.pdf`
     /// or `{run}.genome.pdf`, numbered when there is one already.
     fn export(&mut self) {
-        let stem = match (self.genome, self.state.gene) {
+        let stem = match (self.genome, self.state.settings.gene) {
             (true, _) => format!("{}.genome", self.state.run.prefix),
             (false, Some(g)) => format!(
                 "{}.{}.locus",
@@ -344,6 +397,7 @@ pub fn run(state: State, opts: &legume_tui::Options) -> anyhow::Result<()> {
         loop {
             let gene = screen
                 .state
+                .settings
                 .gene
                 .map_or_else(String::new, |g| screen.state.run.genes[g].to_string());
             session.status(&format!("{} {gene}", screen.state.run.prefix));
@@ -385,7 +439,7 @@ fn draw(f: &mut Frame, s: &mut Screen) {
     ])
     .areas(f.area());
     let run = &s.state.run;
-    let how = match s.state.summary {
+    let how = match s.state.settings.summary {
         Summary::Best => "best".to_string(),
         Summary::Count(c) => format!("links ≥ {c}"),
     };
@@ -394,7 +448,7 @@ fn draw(f: &mut Frame, s: &mut Screen) {
         run.prefix,
         run.genes.len(),
         run.n_pairs(),
-        s.state.measure.name(),
+        s.state.settings.measure.name(),
     );
     f.render_widget(Paragraph::new(Span::styled(title, look.bold)), head);
     let [left, right] =
@@ -425,11 +479,15 @@ fn draw(f: &mut Frame, s: &mut Screen) {
                 ("s".into(), "summary".into()),
                 ("f".into(), "figure/table".into()),
                 ("g".into(), "picture/text".into()),
+                ("b".into(), if s.genome { "" } else { "layout" }.into()),
                 (
                     "[ ]".into(),
                     if s.genome { "zoom" } else { "window" }.into(),
                 ),
-                ("←→".into(), if s.genome { "pan" } else { "" }.into()),
+                (
+                    "←→".into(),
+                    if s.genome { "pan" } else { "next gene" }.into(),
+                ),
                 ("c".into(), "cutoff".into()),
                 ("e".into(), "PDF".into()),
                 ("q".into(), "quit".into()),
@@ -467,11 +525,11 @@ fn genes(f: &mut Frame, s: &Screen, area: Rect, look: &Look) -> ListHit {
 }
 
 fn locus(f: &mut Frame, s: &Screen, area: Rect, look: &Look) {
-    let Some(g) = s.state.gene else {
+    let Some(g) = s.state.settings.gene else {
         return;
     };
     let run = &s.state.run;
-    let m = s.state.measure;
+    let m = s.state.settings.measure;
     let mut links = run.links(g);
     links.sort_by(|a, b| b.get(m).total_cmp(&a.get(m)));
     let top = links
@@ -597,13 +655,32 @@ fn text_figure(f: &mut Frame, s: &mut Screen, area: Rect, look: &Look) {
         Some((_, TextFigure::Genome(g))) => super::text::render_genome(
             g,
             &s.state.run.genes,
-            &s.state.genome_view,
+            &s.state.settings.genome_view,
             inner,
             f.buffer_mut(),
         ),
         Some((_, TextFigure::Locus(Some(locus)))) => {
-            super::text::render(locus, &s.state.style, inner, f.buffer_mut());
+            super::text::render(locus, &s.state.settings.style, inner, f.buffer_mut());
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_swipe_steps_once_however_many_events_it_sends() {
+        let t0 = std::time::Instant::now();
+        let ms = |n| t0 + std::time::Duration::from_millis(n);
+        assert!(new_swipe(None, t0), "the first scroll steps");
+        // Events every 16 ms, each against the one before it.
+        assert!(!new_swipe(Some(ms(0)), ms(16)));
+        assert!(!new_swipe(Some(ms(16)), ms(32)));
+        assert!(
+            new_swipe(Some(ms(32)), ms(32) + SWIPE),
+            "a pause, then a new swipe"
+        );
     }
 }

@@ -55,6 +55,13 @@ pub struct ViewArgs {
     #[arg(long, default_value_t = 0.05)]
     pub cutoff: f32,
 
+    /// How a picture of the locus draws its links: arcs from the gene's
+    /// TSS, or a bipartite graph, straight lines from the peaks along each
+    /// row's top to the TSS at its foot (text is a grid of peaks by group
+    /// either way)
+    #[arg(long, value_enum, default_value_t)]
+    pub layout: figure::Layout,
+
     /// A position (bp) to mark with a dashed line; again for more
     #[arg(long = "mark")]
     pub marks: Vec<i64>,
@@ -91,9 +98,15 @@ pub struct ViewArgs {
     pub session: legume_tui::cli::SessionArgs,
 }
 
-/// What is being looked at.
+/// What is being looked at: a run, and how.
 pub struct State {
     pub run: Run,
+    pub settings: Settings,
+}
+
+/// How a run is looked at: everything a call or a key may change.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Settings {
     /// The gene whose locus is shown.
     pub gene: Option<usize>,
     pub measure: Measure,
@@ -105,10 +118,9 @@ pub struct State {
     pub genome_view: figure::GenomeView,
 }
 
-impl State {
-    pub fn new(run: Run) -> Self {
+impl Default for Settings {
+    fn default() -> Self {
         Self {
-            run,
             gene: None,
             measure: Measure::Score,
             summary: Summary::Best,
@@ -117,10 +129,19 @@ impl State {
             genome_view: figure::GenomeView::default(),
         }
     }
+}
+
+impl State {
+    pub fn new(run: Run) -> Self {
+        Self {
+            run,
+            settings: Settings::default(),
+        }
+    }
 
     /// Show `name`'s locus.
     pub fn set_gene(&mut self, name: &str) -> anyhow::Result<()> {
-        self.gene = Some(self.run.gene(name).ok_or_else(|| {
+        self.settings.gene = Some(self.run.gene(name).ok_or_else(|| {
             let like = self.run.genes_like(name, 5);
             if like.is_empty() {
                 anyhow::anyhow!("{name}: no links in this run")
@@ -137,7 +158,8 @@ impl State {
     /// The genome-wide view, as it is set.
     #[must_use]
     pub fn genome(&self) -> data::Genome {
-        self.run.genome(self.measure, self.summary)
+        self.run
+            .genome(self.settings.measure, self.settings.summary)
     }
 
     /// Show only chromosome `chr` of the genome-wide view; `""` all of it.
@@ -149,15 +171,19 @@ impl State {
                 .span_of(chr)
                 .ok_or_else(|| anyhow::anyhow!("{chr}: no linked gene on it"))?
         };
-        self.genome_view.from = from;
-        self.genome_view.span = span;
+        self.settings.genome_view.from = from;
+        self.settings.genome_view.span = span;
         Ok(())
     }
 
     /// The locus shown, as it is set.
     #[must_use]
     pub fn locus(&self) -> Option<data::Locus> {
-        self.run.locus(self.gene?, self.measure, self.half_window)
+        self.run.locus(
+            self.settings.gene?,
+            self.settings.measure,
+            self.settings.half_window,
+        )
     }
 
     /// The genome-wide figure, or the locus one (none without a placed
@@ -176,7 +202,7 @@ impl State {
     pub fn aspect(&self, fig: &Figure) -> f32 {
         match fig {
             Figure::Genome(_) => figure::GENOME_ASPECT,
-            Figure::Locus(l) => figure::aspect(self.style.rows_of(l).len()),
+            Figure::Locus(l) => figure::aspect(self.settings.style.rows_of(l).len()),
         }
     }
 
@@ -192,9 +218,16 @@ impl State {
     pub fn draw(&self, fig: &Figure, frame: &mut Frame, font: Font, bold: Font) {
         match fig {
             Figure::Genome(g) => {
-                figure::draw_genome(frame, font, bold, g, &self.run.genes, &self.genome_view);
+                figure::draw_genome(
+                    frame,
+                    font,
+                    bold,
+                    g,
+                    &self.run.genes,
+                    &self.settings.genome_view,
+                );
             }
-            Figure::Locus(l) => figure::draw_locus(frame, font, bold, l, &self.style),
+            Figure::Locus(l) => figure::draw_locus(frame, font, bold, l, &self.settings.style),
         }
     }
 }
@@ -215,19 +248,20 @@ pub fn run_view(args: &ViewArgs) -> anyhow::Result<()> {
     if let Some(g) = &args.gene {
         state.set_gene(g)?;
     }
-    state.measure = Measure::parse(&args.measure)?;
-    state.summary = match args.summary.as_str() {
+    state.settings.measure = Measure::parse(&args.measure)?;
+    state.settings.summary = match args.summary.as_str() {
         "count" => Summary::Count(args.count_cutoff),
         _ => Summary::Best,
     };
     if let Some(c) = &args.chr {
         state.show_chr(c)?;
     }
-    state.genome_view.focus = state.gene;
-    state.half_window = args.half_window;
-    state.style = figure::Style {
+    state.settings.genome_view.focus = state.settings.gene;
+    state.settings.half_window = args.half_window;
+    state.settings.style = figure::Style {
         cutoff: args.cutoff,
         marks: args.marks.clone(),
+        layout: args.layout,
         rows: args
             .rows
             .iter()
@@ -237,8 +271,13 @@ pub fn run_view(args: &ViewArgs) -> anyhow::Result<()> {
     if args.genome {
         if let Some(width) = args.text {
             let g = state.genome();
-            let text =
-                text::genome_to_string(&g, &state.run.genes, &state.genome_view, width.max(40), 24);
+            let text = text::genome_to_string(
+                &g,
+                &state.run.genes,
+                &state.settings.genome_view,
+                width.max(40),
+                24,
+            );
             println!("{text}");
             return Ok(());
         }
@@ -254,7 +293,10 @@ pub fn run_view(args: &ViewArgs) -> anyhow::Result<()> {
         let locus = state
             .locus()
             .ok_or_else(|| anyhow::anyhow!("the gene has no place on the genome in this run"))?;
-        println!("{}", text::to_string(&locus, &state.style, width.max(40)));
+        println!(
+            "{}",
+            text::to_string(&locus, &state.settings.style, width.max(40))
+        );
         return Ok(());
     }
     if args.pdf.is_some() || args.png.is_some() {

@@ -18,6 +18,19 @@ pub const SMALL: [(&str, &str); 7] = [
     ("module-only-min-rows", "30"),
 ];
 
+/// The chickpea binary these tests are built with.
+pub fn chickpea() -> std::process::Command {
+    std::process::Command::new(env!("CARGO_BIN_EXE_chickpea"))
+}
+
+/// [`SMALL`] as command-line arguments.
+pub fn small() -> Vec<String> {
+    SMALL
+        .iter()
+        .flat_map(|(flag, value)| [format!("--{flag}"), value.to_string()])
+        .collect()
+}
+
 pub const N_GENES: usize = 24;
 pub const N_CELLS: usize = 120;
 /// Two peaks per gene: one at the TSS, one 3 kb upstream.

@@ -7,4 +7,6 @@ mod common;
 mod context_links;
 mod embed_two_track;
 mod mcp;
+#[cfg(feature = "tui")]
+mod view;
 mod workflow;

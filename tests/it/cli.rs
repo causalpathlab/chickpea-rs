@@ -1,19 +1,6 @@
 //! `chickpea peak-to-gene` as a user runs it.
 
-use crate::common::{self, write_fixture, write_gene_coords};
-use std::process::Command;
-
-fn chickpea() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_chickpea"))
-}
-
-/// [`common::SMALL`] as command-line arguments.
-fn small() -> Vec<String> {
-    common::SMALL
-        .iter()
-        .flat_map(|(flag, value)| [format!("--{flag}"), value.to_string()])
-        .collect()
-}
+use crate::common::{self, chickpea, small, write_fixture, write_gene_coords};
 
 #[test]
 fn peak_to_gene_runs_end_to_end_and_writes_the_link_tables() {

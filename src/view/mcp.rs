@@ -56,22 +56,25 @@ impl Viewer {
 
     fn genome(&mut self, a: GenomeArgs) -> anyhow::Result<Vec<Content>> {
         let state = self.state()?;
-        set(
-            state,
-            a.measure.as_deref(),
-            a.summary.as_deref(),
-            a.count_cutoff,
-        )?;
-        if let Some(c) = &a.chr {
-            state.show_chr(c)?;
-        }
-        if let Some(g) = &a.gene {
-            state.set_gene(g)?;
-        }
-        state.genome_view.focus = state.gene;
+        all_or_nothing(state, |state| {
+            set(
+                state,
+                a.measure.as_deref(),
+                a.summary.as_deref(),
+                a.count_cutoff,
+            )?;
+            if let Some(c) = &a.chr {
+                state.show_chr(c)?;
+            }
+            if let Some(g) = &a.gene {
+                state.set_gene(g)?;
+            }
+            Ok(())
+        })?;
+        state.settings.genome_view.focus = state.settings.gene;
         let genome = state.genome();
         let run = &state.run;
-        let (from, span) = state.genome_view.window();
+        let (from, span) = state.settings.genome_view.window();
         let len = genome.len().max(1) as f32;
         let in_sight: rustc_hash::FxHashSet<usize> = genome
             .points
@@ -82,7 +85,7 @@ impl Viewer {
             })
             .map(|p| p.0)
             .collect();
-        let ranked = run.ranked(state.measure, state.summary);
+        let ranked = run.ranked(state.settings.measure, state.settings.summary);
         let genes: Vec<Value> = ranked
             .iter()
             .filter(|&&(g, v)| in_sight.contains(&g) && v > 0.0)
@@ -102,8 +105,8 @@ impl Viewer {
             .collect();
         let reply = json!({
             "run": run.prefix,
-            "measure": state.measure.name(),
-            "summary": summary_name(state.summary),
+            "measure": state.settings.measure.name(),
+            "summary": summary_name(state.settings.summary),
             "shown": shown_part(&genome, from, span),
             "genes": genes,
             "settings": settings(state),
@@ -115,7 +118,7 @@ impl Viewer {
                 Content::Text(super::text::genome_to_string(
                     &genome,
                     &run.genes,
-                    &state.genome_view,
+                    &state.settings.genome_view,
                     cols,
                     24,
                 ))
@@ -131,33 +134,40 @@ impl Viewer {
 
     fn locus(&mut self, a: LocusArgs) -> anyhow::Result<Vec<Content>> {
         let state = self.state()?;
-        set(state, a.measure.as_deref(), None, None)?;
-        if let Some(g) = &a.gene {
-            state.set_gene(g)?;
-        }
-        if let Some(h) = a.half_window {
-            state.half_window = (h > 0).then_some(h);
-        }
-        if let Some(c) = a.cutoff {
-            state.style.cutoff = c;
-        }
-        if let Some(m) = a.marks {
-            state.style.marks = m;
-        }
-        if let Some(r) = a.rows {
-            state.style.rows = r
-                .iter()
-                .map(|v| match v {
-                    Value::String(s) => state.run.row_of(s),
-                    other => state.run.row_of(&other.to_string()),
-                })
-                .collect::<anyhow::Result<_>>()?;
-        }
+        all_or_nothing(state, |state| {
+            set(state, a.measure.as_deref(), None, None)?;
+            if let Some(g) = &a.gene {
+                state.set_gene(g)?;
+            }
+            if let Some(h) = a.half_window {
+                state.settings.half_window = (h > 0).then_some(h);
+            }
+            if let Some(c) = a.cutoff {
+                state.settings.style.cutoff = c;
+            }
+            if let Some(l) = &a.layout {
+                state.settings.style.layout = super::figure::Layout::parse(l)?;
+            }
+            if let Some(m) = &a.marks {
+                state.settings.style.marks.clone_from(m);
+            }
+            if let Some(r) = &a.rows {
+                state.settings.style.rows = r
+                    .iter()
+                    .map(|v| match v {
+                        Value::String(s) => state.run.row_of(s),
+                        other => state.run.row_of(&other.to_string()),
+                    })
+                    .collect::<anyhow::Result<_>>()?;
+            }
+            Ok(())
+        })?;
         let g = state
+            .settings
             .gene
             .ok_or_else(|| anyhow::anyhow!("give a gene: view_locus {{\"gene\": \"...\"}}"))?;
         let run = &state.run;
-        let m = state.measure;
+        let m = state.settings.measure;
         let mut links = run.links(g);
         links.sort_by(|a, b| b.get(m).total_cmp(&a.get(m)));
         let n = links.len();
@@ -189,7 +199,7 @@ impl Viewer {
                 reply["tss"] = locus.tss.tss.into();
                 reply["window"] = json!([locus.lo, locus.hi]);
                 reply["rows"] = state
-                    .style
+                    .settings.style
                     .rows_of(&locus)
                     .into_iter()
                     .map(|i| {
@@ -210,7 +220,7 @@ impl Viewer {
                     out.push(Content::Json(reply));
                     out.push(Content::Text(super::text::to_string(
                         &locus,
-                        &state.style,
+                        &state.settings.style,
                         cols,
                     )));
                     return Ok(out);
@@ -249,14 +259,14 @@ impl Viewer {
             "view".into(),
             state.run.prefix.clone(),
             "--measure".into(),
-            state.measure.name().into(),
+            state.settings.measure.name().into(),
         ];
-        if let Some(g) = state.gene {
+        if let Some(g) = state.settings.gene {
             argv.extend(["--gene".into(), state.run.genes[g].to_string()]);
         }
         if genome {
             argv.push("--genome".into());
-            if let Summary::Count(c) = state.summary {
+            if let Summary::Count(c) = state.settings.summary {
                 argv.extend([
                     "--summary".into(),
                     "count".into(),
@@ -264,7 +274,7 @@ impl Viewer {
                     c.to_string(),
                 ]);
             }
-            let (from, span) = state.genome_view.window();
+            let (from, span) = state.settings.genome_view.window();
             if span < 0.999 {
                 // Only a whole chromosome can be named on the line.
                 let g = state.genome();
@@ -274,25 +284,36 @@ impl Viewer {
                 argv.extend(["--chr".into(), name.to_string()]);
             }
         } else {
-            anyhow::ensure!(state.gene.is_some(), "no gene shown: view_locus one first");
+            anyhow::ensure!(
+                state.settings.gene.is_some(),
+                "no gene shown: view_locus one first"
+            );
         }
-        argv.extend(["--cutoff".into(), state.style.cutoff.to_string()]);
-        if let Some(h) = state.half_window {
+        argv.extend(["--cutoff".into(), state.settings.style.cutoff.to_string()]);
+        argv.extend(["--layout".into(), state.settings.style.layout.name()]);
+        if let Some(h) = state.settings.half_window {
             argv.extend(["--half-window".into(), h.to_string()]);
         }
-        for m in &state.style.marks {
+        for m in &state.settings.style.marks {
             argv.extend(["--mark".into(), m.to_string()]);
         }
-        if !state.style.rows.is_empty() {
+        if !state.settings.style.rows.is_empty() {
             // By name, unless a name would not survive the comma list.
             let names: Vec<String> = state
+                .settings
                 .style
                 .rows
                 .iter()
                 .map(|&r| state.run.row_name(r))
                 .collect();
             let rows: Vec<String> = if names.iter().any(|n| n.contains(',')) {
-                state.style.rows.iter().map(usize::to_string).collect()
+                state
+                    .settings
+                    .style
+                    .rows
+                    .iter()
+                    .map(usize::to_string)
+                    .collect()
             } else {
                 names
             };
@@ -312,7 +333,7 @@ impl Viewer {
         if let Some(d) = a.dpi {
             argv.extend(["--dpi".into(), d.to_string()]);
         }
-        let summary = match (genome, state.gene) {
+        let summary = match (genome, state.settings.gene) {
             (true, _) => format!("genome-wide figure of {}", state.run.prefix),
             (false, Some(g)) => format!(
                 "locus figure of {} in {}",
@@ -355,10 +376,11 @@ fn shown_part(genome: &super::data::Genome, from: f32, span: f32) -> String {
 /// The settings in effect, as every view_* reply echoes them: they carry
 /// over from call to call, into view_export too.
 fn settings(state: &State) -> Value {
-    let rows: Value = if state.style.rows.is_empty() {
+    let rows: Value = if state.settings.style.rows.is_empty() {
         "all of them".into()
     } else {
         state
+            .settings
             .style
             .rows
             .iter()
@@ -366,14 +388,15 @@ fn settings(state: &State) -> Value {
             .collect()
     };
     json!({
-        "measure": state.measure.name(),
-        "summary": summary_name(state.summary),
-        "gene": state.gene.map(|g| state.run.genes[g].to_string()),
-        "half_window": state.half_window.map_or_else(|| Value::from("the farthest link"), Value::from),
-        "cutoff": state.style.cutoff,
-        "marks": state.style.marks,
+        "measure": state.settings.measure.name(),
+        "summary": summary_name(state.settings.summary),
+        "gene": state.settings.gene.map(|g| state.run.genes[g].to_string()),
+        "half_window": state.settings.half_window.map_or_else(|| Value::from("the farthest link"), Value::from),
+        "cutoff": state.settings.style.cutoff,
+        "layout": state.settings.style.layout.name(),
+        "marks": state.settings.style.marks,
         "rows": rows,
-        "genome_view": shown_part(&state.genome(), state.genome_view.from, state.genome_view.span),
+        "genome_view": shown_part(&state.genome(), state.settings.genome_view.from, state.settings.genome_view.span),
     })
 }
 
@@ -385,9 +408,9 @@ fn set(
     cutoff: Option<f32>,
 ) -> anyhow::Result<()> {
     if let Some(m) = measure {
-        state.measure = Measure::parse(m)?;
+        state.settings.measure = Measure::parse(m)?;
     }
-    state.summary = match (summary, cutoff, state.summary) {
+    state.settings.summary = match (summary, cutoff, state.settings.summary) {
         (Some("best"), _, _) => Summary::Best,
         (Some("count"), c, Summary::Count(old)) => Summary::Count(c.unwrap_or(old)),
         (Some("count"), c, Summary::Best) => Summary::Count(c.unwrap_or(super::data::COUNT_CUTOFF)),
@@ -396,6 +419,20 @@ fn set(
         (None, _, now) => now,
     };
     Ok(())
+}
+
+/// `change` made to `state`'s settings whole, or not at all: a call that
+/// is refused part way changes none of them.
+fn all_or_nothing(
+    state: &mut State,
+    change: impl FnOnce(&mut State) -> anyhow::Result<()>,
+) -> anyhow::Result<()> {
+    let before = state.settings.clone();
+    let done = change(state);
+    if done.is_err() {
+        state.settings = before;
+    }
+    done
 }
 
 fn summary_name(s: Summary) -> String {
@@ -440,6 +477,7 @@ struct LocusArgs {
     measure: Option<String>,
     half_window: Option<i64>,
     cutoff: Option<f32>,
+    layout: Option<String>,
     marks: Option<Vec<i64>>,
     rows: Option<Vec<Value>>,
     n: Option<usize>,
@@ -504,7 +542,9 @@ pub fn specs() -> Vec<ToolSpec> {
             "One gene's locus in the open run, as a figure (PNG) and its numbers. The figure has \
              a row for all the cells and one per cell group: arcs from the TSS to the linked peaks, \
              darker where stronger, over each peak's accessibility in that row; dashed lines at \
-             the TSS and at the marks; the window's genes and a scale at the foot. In a row a \
+             the TSS and at the marks; the window's genes and a scale at the foot. Layout \
+             bipartite draws each row as a graph instead: the peaks along its top, under their \
+             accessibility, and a straight line from each to the TSS at its foot. In a row a \
              link is its gate (or ABC prior) times its peak's accessibility there, over the \
              gene's candidates, times its corr for score. The numbers: the candidates, the best \
              by the measure first. Every setting stays set.",
@@ -515,10 +555,11 @@ pub fn specs() -> Vec<ToolSpec> {
                     "measure": measure,
                     "half_window": {"type": "integer", "minimum": 0, "description": "bp each side of the TSS; 0: the gene's farthest link [default]"},
                     "cutoff": {"type": "number", "minimum": 0, "maximum": 1, "description": "Leave out links weaker than this share of the strongest shown [default: 0.05]"},
+                    "layout": {"enum": super::figure::Layout::names(), "description": "How the picture draws the links: arcs from the gene's TSS, or straight lines from the peaks to the TSS, a bipartite graph [default: arcs]"},
                     "marks": {"type": "array", "items": {"type": "integer"}, "description": "Positions (bp) marked with a dashed line; [] for none"},
                     "rows": {"type": "array", "items": {"type": ["string", "integer"]}, "description": "Rows to show: \"all\" (all the cells) and groups by name (as view_open lists them: C0, … or the run's cell types), or by number as view_locus lists them (0 all, 1 the first group); [] for all"},
                     "n": {"type": "integer", "minimum": 1, "description": "How many links to list [default: 20]"},
-                    "format": {"enum": ["png", "text"], "description": "png: the figure as a picture [default]; text: the same figure in characters (braille arcs, block tracks), for a client that shows no images"},
+                    "format": {"enum": ["png", "text"], "description": "png: the figure as a picture [default]; text: a grid in characters, a line per linked peak and a column per row, the link's value there in blocks, for a client that shows no images"},
                     "width": {"type": "integer", "minimum": 40, "maximum": 4096, "description": "This call only: image width in pixels [default: 1200], or text width in columns [default: 120]"},
                 },
                 "additionalProperties": false,

@@ -1,42 +1,46 @@
-//! The locus figure in characters, for terminals that show no pictures (or
-//! only half blocks, where thin arcs and small text blur away) and for
-//! agents that read text: arcs in braille, two dots across and four down a
-//! cell, stronger ones brighter; each row's accessibility in eighth blocks;
-//! the TSS and the marks as dotted columns; the window's genes and a scale
-//! as text.
+//! The figures in characters, for terminals that show no pictures (or only
+//! half blocks, where thin lines and small text blur away) and for agents
+//! that read text. A locus is a grid: a line for each linked peak, in
+//! genome order, and a column for each row of the figure (all the cells,
+//! each group), the link's value there in eighth blocks. The genome-wide
+//! view is a scatter in braille, two dots across and four down a cell.
 
 use super::data::{Genome, Locus};
-use super::figure::{bp_text, summary_text, GenomeView, Style as FigureStyle};
+use super::figure::{bp_text, drawn, row_strongest, scales, short, summary_text};
+use super::figure::{GenomeView, Style as FigureStyle};
+use legume_tui::chrome;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 
-/// Arcs of positive links, at their strongest.
+/// Positive links, at their strongest.
 const ARC: (u8, u8, u8) = (178, 120, 230);
-/// Arcs of negative links.
+/// Negative links.
 const ARC_NEG: (u8, u8, u8) = (230, 140, 100);
-/// The weakest arc drawn.
+/// The weakest link shown.
 const FAINT: (u8, u8, u8) = (90, 90, 100);
-const TRACK: Color = Color::Rgb(90, 140, 210);
 const HINT: Color = Color::Rgb(120, 120, 128);
 /// Eighth blocks, empty to full.
 const BLOCKS: [char; 9] = [' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
 /// The braille bit of dot `(x, y)` of a cell, `x` in 0..2, `y` in 0..4.
 const DOT: [[u8; 4]; 2] = [[0x01, 0x02, 0x04, 0x40], [0x08, 0x10, 0x20, 0x80]];
 
-/// Rows a locus row takes at most and at least: arcs, then its track.
-const ROW_MAX: u16 = 6;
-const ROW_MIN: u16 = 3;
-/// Lines at the foot: the genes, their names, the scale, the key (two).
-const FOOT: u16 = 5;
+/// Lines of a grid besides its peaks: the title and the header, then the
+/// key (two).
+const GRID_FRAME: u16 = 4;
+/// The most characters of a peak's name, and of a group's, shown.
+const PEAK_W: usize = 24;
+const GROUP_W: usize = 10;
+/// Spaces between the grid's columns.
+const GAP: usize = 2;
+/// Peaks a grid written out lists at most, the strongest.
+const PEAKS_LISTED: usize = 40;
 
-/// A grid of braille dots, each cell keeping the strongest arc through it.
+/// A grid of braille dots.
 struct Dots {
     w: usize,
     h: usize,
     bits: Vec<u8>,
-    /// The strongest arc through each cell, signed.
-    strength: Vec<f32>,
 }
 
 impl Dots {
@@ -45,12 +49,11 @@ impl Dots {
             w,
             h,
             bits: vec![0; w * h],
-            strength: vec![0.0; w * h],
         }
     }
 
-    /// Set dot `(x, y)` (in dots: `2w × 4h`) for an arc of `s`.
-    fn set(&mut self, x: f32, y: f32, s: f32) {
+    /// Set dot `(x, y)` (in dots: `2w × 4h`).
+    fn set(&mut self, x: f32, y: f32) {
         if x < 0.0 || y < 0.0 {
             return;
         }
@@ -59,23 +62,12 @@ impl Dots {
         if cx >= self.w || cy >= self.h {
             return;
         }
-        let i = cy * self.w + cx;
-        self.bits[i] |= DOT[x % 2][y % 4];
-        if s.abs() > self.strength[i].abs() {
-            self.strength[i] = s;
-        }
+        self.bits[cy * self.w + cx] |= DOT[x % 2][y % 4];
     }
+}
 
-    /// A half-ellipse from dot column `a` to `b` on dot row `base`,
-    /// `height` dots tall.
-    fn arc(&mut self, a: f32, b: f32, base: f32, height: f32, s: f32) {
-        let (mid, rx) = ((a + b) / 2.0, (b - a).abs() / 2.0);
-        let steps = ((rx + height) * 3.0).ceil().max(8.0) as usize;
-        for i in 0..=steps {
-            let t = std::f32::consts::PI * i as f32 / steps as f32;
-            self.set(mid - rx * t.cos(), base - height * t.sin(), s);
-        }
-    }
+fn rgb(c: (u8, u8, u8)) -> Color {
+    Color::Rgb(c.0, c.1, c.2)
 }
 
 fn mix(a: (u8, u8, u8), b: (u8, u8, u8), t: f32) -> Color {
@@ -83,23 +75,58 @@ fn mix(a: (u8, u8, u8), b: (u8, u8, u8), t: f32) -> Color {
     Color::Rgb(l(a.0, b.0), l(a.1, b.1), l(a.2, b.2))
 }
 
-/// Lines a locus of `rows` rows takes at its best.
-#[must_use]
-pub fn height(rows: usize) -> u16 {
-    1 + rows as u16 * ROW_MAX + FOOT
+/// `n` and `what`, plural past one: `1 peak`, `3 peaks`.
+fn count(n: usize, what: &str) -> String {
+    format!("{n} {what}{}", if n == 1 { "" } else { "s" })
 }
 
-/// Draw `locus` into `area` of `buf`, as text.
-pub fn render(locus: &Locus, style: &FigureStyle, area: Rect, buf: &mut Buffer) {
-    let rows = style.rows_of(locus);
-    let label_w = rows
+/// The links of `locus` the grid lists: those shown in some of `rows`,
+/// by each row's own cutoff, in genome order.
+fn listed(locus: &Locus, style: &FigureStyle, rows: &[usize]) -> Vec<usize> {
+    let tops: Vec<f32> = rows
         .iter()
-        .map(|&r| locus.rows[r].label.chars().count())
-        .max()
-        .unwrap_or(0)
-        .max(9) as u16
-        + 1;
-    if area.width < label_w + 20 || area.height < 1 + ROW_MIN + FOOT || rows.is_empty() {
+        .map(|&r| row_strongest(&locus.rows[r].value))
+        .collect();
+    let mut ks: Vec<usize> = (0..locus.links.len())
+        .filter(|&k| {
+            rows.iter()
+                .zip(&tops)
+                .any(|(&r, &top)| drawn(locus.rows[r].value[k], top, style.cutoff))
+        })
+        .collect();
+    ks.sort_by_key(|&k| start_of(locus, k));
+    ks
+}
+
+/// Lines the grid of `locus` takes with every peak it lists, up to
+/// [`PEAKS_LISTED`] of them.
+#[must_use]
+pub fn grid_height(locus: &Locus, style: &FigureStyle) -> u16 {
+    height_for(listed(locus, style, &style.rows_of(locus)).len())
+}
+
+/// Lines a grid listing `n` peaks takes, up to [`PEAKS_LISTED`] of them.
+fn height_for(n: usize) -> u16 {
+    GRID_FRAME + n.clamp(1, PEAKS_LISTED) as u16
+}
+
+/// Draw `locus` into `area` of `buf`, as a grid of its peaks by its rows.
+pub fn render(locus: &Locus, style: &FigureStyle, area: Rect, buf: &mut Buffer) {
+    let ks = listed(locus, style, &style.rows_of(locus));
+    render_listed(locus, style, ks, area, buf);
+}
+
+/// [`render`], the links it lists (by [`listed`]) given.
+fn render_listed(
+    locus: &Locus,
+    style: &FigureStyle,
+    mut ks: Vec<usize>,
+    area: Rect,
+    buf: &mut Buffer,
+) {
+    let rows = style.rows_of(locus);
+    let room = area.height.saturating_sub(GRID_FRAME) as usize;
+    if area.width < 40 || room == 0 || rows.is_empty() {
         buf.set_string(
             area.x,
             area.y,
@@ -108,233 +135,184 @@ pub fn render(locus: &Locus, style: &FigureStyle, area: Rect, buf: &mut Buffer) 
         );
         return;
     }
-    let what = locus.measure.arcs();
-    let title = format!(
-        "{} {}:{}-{} · {what}",
-        locus.gene, locus.tss.chr, locus.lo, locus.hi
-    );
-    buf.set_stringn(
-        area.x,
-        area.y,
-        &title,
-        area.width as usize,
-        Style::default().add_modifier(Modifier::BOLD),
-    );
-
-    // Rows as tall as fit, as many as fit.
-    let room = area.height - 1 - FOOT;
-    let rh = (room / rows.len() as u16).clamp(ROW_MIN, ROW_MAX);
-    let shown = ((room / rh) as usize).min(rows.len());
-    let x0 = area.x + label_w;
-    let w = (area.width - label_w) as usize;
-    let span = (locus.hi - locus.lo).max(1) as f32;
-    // A position's column, in dots (two to a cell) and in cells.
-    let dx = |bp: i64| (bp - locus.lo) as f32 / span * (2 * w - 1) as f32;
-    let col = |bp: i64| ((dx(bp) / 2.0) as usize).min(w - 1);
-    let tss_col = col(locus.tss.tss);
-    let mark_cols: Vec<usize> = style
-        .marks
-        .iter()
-        .filter(|m| (locus.lo..=locus.hi).contains(m))
-        .map(|&m| col(m))
-        .collect();
-
-    let (v_max, rate_max) = super::figure::scales(locus, &rows);
-
-    for (i, &r) in rows.iter().take(shown).enumerate() {
-        let row = &locus.rows[r];
-        let y = area.y + 1 + i as u16 * rh;
-        let arc_rows = (rh - 1) as usize;
-        let ty = y + rh - 1;
-
-        buf.set_stringn(
-            area.x,
-            y,
-            &row.label,
-            (label_w - 1) as usize,
-            Style::default().add_modifier(Modifier::BOLD),
-        );
-        if let Some(n) = row.cells.filter(|_| arc_rows > 1) {
-            buf.set_stringn(
-                area.x,
-                y + 1,
-                format!("{n} cells"),
-                (label_w - 1) as usize,
-                Style::default().fg(HINT),
-            );
-        }
-
-        // The arcs, in braille; the cutoff is the row's own.
-        let row_max = super::figure::row_strongest(&row.value);
-        let mut dots = Dots::new(w, arc_rows);
-        let base = (arc_rows * 4) as f32 - 1.0;
-        if v_max > 0.0 {
-            for (k, l) in locus.links.iter().enumerate() {
-                let v = row.value[k];
-                if !super::figure::drawn(v, row_max, style.cutoff) {
-                    continue;
-                }
-                let s = v.abs() / v_max;
-                let Some(p) = &l.place else { continue };
-                let (a, b) = (dx(locus.tss.tss), dx(p.mid()));
-                let reach = ((a - b).abs() / (2 * w) as f32 * 2.2).clamp(0.25, 1.0);
-                let signed = if v < 0.0 { -s } else { s };
-                if (a - b).abs() < 2.0 {
-                    // A peak at the TSS: a stem as tall as the link is strong.
-                    let stem = (base * (0.2 + 0.7 * s.sqrt())).max(1.0);
-                    for d in 0..stem as usize {
-                        dots.set(b, base - d as f32, signed);
-                    }
-                } else {
-                    dots.arc(a.min(b), a.max(b), base, base * reach, signed);
-                }
-            }
-        }
-        for cy in 0..arc_rows {
-            for cx in 0..w {
-                let i = cy * w + cx;
-                let (x, yy) = (x0 + cx as u16, y + cy as u16);
-                if dots.bits[i] != 0 {
-                    let s = dots.strength[i];
-                    let c = mix(FAINT, if s < 0.0 { ARC_NEG } else { ARC }, s.abs().sqrt());
-                    let mut st = Style::default().fg(c);
-                    if s.abs() > 0.5 {
-                        st = st.add_modifier(Modifier::BOLD);
-                    }
-                    let ch = char::from_u32(0x2800 + u32::from(dots.bits[i])).unwrap_or(' ');
-                    buf[(x, yy)].set_char(ch).set_style(st);
-                } else if cx == tss_col || mark_cols.contains(&cx) {
-                    buf[(x, yy)]
-                        .set_char('┊')
-                        .set_style(Style::default().fg(HINT));
-                }
-            }
-        }
-
-        // The track: the most open peak under each column.
-        let mut cols = vec![0f32; w];
-        for ((_, p), &v) in locus.peaks.iter().zip(&row.rate) {
-            for c in &mut cols[col(p.start)..=col(p.end)] {
-                *c = c.max(v);
-            }
-        }
-        for (cx, &v) in cols.iter().enumerate() {
-            let level = if rate_max > 0.0 && v > 0.0 {
-                ((v / rate_max * 8.0).ceil() as usize).clamp(1, 8)
-            } else {
-                0
-            };
-            let (ch, st) = match level {
-                0 => ('▁', Style::default().fg(Color::Rgb(60, 60, 66))),
-                l => (BLOCKS[l], Style::default().fg(TRACK)),
-            };
-            buf[(x0 + cx as u16, ty)].set_char(ch).set_style(st);
-        }
-    }
-    if shown < rows.len() {
-        let y = area.y + 1 + shown as u16 * rh - 1;
-        let more = format!("+{} rows", rows.len() - shown);
-        buf.set_stringn(
-            area.x,
-            y,
-            more,
-            (label_w - 1) as usize,
-            Style::default().fg(HINT),
-        );
-    }
-
-    // The genes of the window, then the scale.
-    let gy = area.y + 1 + shown as u16 * rh;
-    for x in 0..w {
-        buf[(x0 + x as u16, gy)]
-            .set_char('─')
-            .set_style(Style::default().fg(HINT));
-    }
-    for (name, t) in &locus.genes {
-        let own = **name == *locus.gene;
-        buf[(x0 + col(*t) as u16, gy)]
-            .set_char(if own { '┃' } else { '│' })
-            .set_style(Style::default().fg(if own { Color::Reset } else { HINT }));
-    }
-    let order = super::figure::label_order(locus);
-    let mut taken: Vec<(usize, usize)> = Vec::new();
-    for (name, t) in order {
-        let own = **name == *locus.gene;
-        let n = name.chars().count();
-        let start = col(*t).saturating_sub(n / 2).min(w.saturating_sub(n));
-        if taken
-            .iter()
-            .any(|&(a, b)| start < b + 1 && start + n + 1 > a)
-        {
-            continue;
-        }
-        taken.push((start, start + n));
-        let st = if own {
-            Style::default().add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(HINT)
+    let (v_max, _) = scales(locus, &rows);
+    // Too many to list: the strongest, put back in genome order.
+    let hidden = ks.len().saturating_sub(room);
+    if hidden > 0 {
+        let strength = |k: usize| {
+            rows.iter()
+                .map(|&r| locus.rows[r].value[k].abs())
+                .fold(0f32, f32::max)
         };
-        buf.set_stringn(x0 + start as u16, gy + 1, name.as_ref(), w - start, st);
-    }
-    let sy = gy + 2;
-    let ticks = [0.0f32, 0.25, 0.5, 0.75, 1.0];
-    let mut used_to = 0usize;
-    for t in ticks {
-        let bp = locus.lo as f32 + t * span;
-        let s = bp_text(bp);
-        let c = ((t * (w - 1) as f32) as usize).saturating_sub(if t >= 1.0 {
-            s.len() - 1
-        } else {
-            s.len() / 2 * usize::from(t > 0.0)
-        });
-        if c < used_to || c + s.len() > w {
-            continue;
-        }
-        buf.set_string(x0 + c as u16, sy, &s, Style::default().fg(HINT));
-        used_to = c + s.len() + 1;
+        let mut by: Vec<(f32, usize)> = ks.iter().map(|&k| (strength(k), k)).collect();
+        by.sort_by(|a, b| b.0.total_cmp(&a.0));
+        ks = by.into_iter().take(room).map(|(_, k)| k).collect();
+        ks.sort_by_key(|&k| start_of(locus, k));
     }
 
-    // The key: the arcs' colours, then the scales, flowing onto a second
-    // line where it is narrow (a part that does not fit there is left out).
+    let bold = Style::default().add_modifier(Modifier::BOLD);
     let hint = Style::default().fg(HINT);
-    let ky = sy + 1;
-    let mut x = area.x;
-    let end = area.x + area.width;
-    for (text, st) in [
-        ("key: ", hint),
-        ("⠉⠉ positive", Style::default().fg(mix(ARC, ARC, 1.0))),
-        ("  ", hint),
-        (
-            "⠉⠉ negative",
-            Style::default().fg(mix(ARC_NEG, ARC_NEG, 1.0)),
-        ),
-    ] {
-        let (nx, _) = buf.set_stringn(x, ky, text, end.saturating_sub(x) as usize, st);
-        x = nx;
-    }
-    let parts: Vec<String> = super::figure::key_parts(v_max, rate_max, style.cutoff)
-        .into_iter()
-        .map(|p| p.replace("bars:", "▁▂▃█:"))
-        .collect();
-    let width = |t: &str| t.chars().count() as f32;
-    let placed = super::figure::flow(
-        &parts,
-        width,
-        f32::from(x),
-        f32::from(area.x) + 5.0,
-        f32::from(end),
+    let title = format!(
+        "{} {}:{}-{} · blocks: {}{}",
+        locus.gene,
+        locus.tss.chr,
+        locus.lo,
+        locus.hi,
+        locus.measure.shown(),
+        if locus.tss.inferred {
+            " · TSS inferred"
+        } else {
+            ""
+        }
     );
-    for ((line, at), part) in placed.iter().zip(&parts) {
+    let width = area.width as usize;
+    buf.set_stringn(area.x, area.y, &title, width, bold);
+
+    // The peak, its distance from the TSS and its value: as many columns
+    // of groups as fit after them.
+    let m = locus.measure;
+    let dist: Vec<String> = ks
+        .iter()
+        .map(|&k| {
+            locus.links[k].place.as_ref().map_or_else(String::new, |p| {
+                let d = p.mid() - locus.tss.tss;
+                format!("{}{}", if d > 0 { "+" } else { "" }, bp_text(d as f32))
+            })
+        })
+        .collect();
+    let value: Vec<String> = ks
+        .iter()
+        .map(|&k| format!("{:.3}", locus.links[k].get(m)))
+        .collect();
+    let wide = |v: &[String], head: &str| {
+        v.iter()
+            .map(|s| s.chars().count())
+            .max()
+            .unwrap_or(0)
+            .max(head.len())
+    };
+    let (dist_w, value_w) = (wide(&dist, "dist"), wide(&value, m.name()));
+    // The peak's name gives way to its numbers where it is narrow.
+    let peak_w = ks
+        .iter()
+        .map(|&k| locus.links[k].peak.chars().count())
+        .max()
+        .unwrap_or(0)
+        .clamp(4, PEAK_W)
+        .min(width.saturating_sub(GAP + dist_w + GAP + value_w));
+    if peak_w < 4 {
+        buf.set_string(area.x, area.y + 1, "too narrow for the grid", hint);
+        return;
+    }
+    let dist_x = peak_w + GAP;
+    let value_x = dist_x + dist_w + GAP;
+    let columns: Vec<Column> = rows
+        .iter()
+        .scan(value_x + value_w, |x, &r| {
+            let label = chrome::short(&locus.rows[r].label, GROUP_W);
+            let w = label.chars().count().max(3);
+            let col = Column {
+                x: *x + GAP,
+                w,
+                top: row_strongest(&locus.rows[r].value),
+                r,
+                label,
+            };
+            *x += GAP + w;
+            Some(col)
+        })
+        .take_while(|c| c.x + c.w <= width)
+        .collect();
+    let dropped = rows.len() - columns.len();
+
+    let y = area.y + 1;
+    let right = |s: &str, w: usize| format!("{s:>w$}");
+    let at = |x: usize| area.x + x as u16;
+    buf.set_string(at(0), y, "peak", bold);
+    buf.set_string(at(dist_x), y, right("dist", dist_w), bold);
+    buf.set_string(at(value_x), y, right(m.name(), value_w), bold);
+    for c in &columns {
+        buf.set_string(at(c.x), y, &c.label, bold);
+    }
+    for (i, &k) in ks.iter().enumerate() {
+        let y = y + 1 + i as u16;
+        let peak = chrome::middle(&locus.links[k].peak, peak_w);
+        buf.set_string(at(0), y, peak, Style::default());
+        buf.set_string(at(dist_x), y, right(&dist[i], dist_w), hint);
+        buf.set_string(at(value_x), y, right(&value[i], value_w), Style::default());
+        for c in &columns {
+            let v = locus.rows[c.r].value[k];
+            if drawn(v, c.top, style.cutoff) && v_max > 0.0 {
+                let s = v.abs() / v_max;
+                let level = ((s * 8.0).ceil() as usize).clamp(1, 8);
+                let mut st =
+                    Style::default().fg(mix(FAINT, if v < 0.0 { ARC_NEG } else { ARC }, s.sqrt()));
+                if s > 0.5 {
+                    st = st.add_modifier(Modifier::BOLD);
+                }
+                let block: String = std::iter::repeat_n(BLOCKS[level], c.w).collect();
+                buf.set_string(at(c.x), y, block, st);
+            } else if v.is_finite() && v != 0.0 {
+                buf.set_string(at(c.x), y, "·", hint);
+            }
+        }
+    }
+
+    // The key, flowing onto a second line where it is narrow (a part that
+    // does not fit there is left out); what is left out first, so it is
+    // never the part cut off.
+    let ky = y + 1 + ks.len() as u16;
+    let mut texts: Vec<String> = Vec::new();
+    let mut styles: Vec<Style> = Vec::new();
+    let mut part = |text: String, st: Style| {
+        texts.push(text);
+        styles.push(st);
+    };
+    if hidden > 0 {
+        part(
+            format!("+{} not listed (the weakest)", count(hidden, "peak")),
+            hint,
+        );
+    }
+    if dropped > 0 {
+        part(format!("+{} past the edge", count(dropped, "group")), hint);
+    }
+    part("█ positive".into(), Style::default().fg(rgb(ARC)));
+    part("█ negative".into(), Style::default().fg(rgb(ARC_NEG)));
+    part(format!("taller: stronger (top {})", short(v_max)), hint);
+    if style.cutoff > 0.0 {
+        part(
+            format!("·: under {} of the group's top", short(style.cutoff)),
+            hint,
+        );
+    }
+    let chars = |t: &str| t.chars().count() as f32;
+    let placed = super::figure::flow(&texts, chars, 0.0, 0.0, width as f32);
+    for (((line, x), text), st) in placed.iter().zip(&texts).zip(&styles) {
         if *line > 1 {
             break;
         }
-        let y = ky + *line as u16;
-        let at = *at as u16;
-        if *line == 0 || at > area.x + 5 {
-            buf.set_string(at.saturating_sub(3), y, " · ", hint);
+        let (x, y) = (*x as usize, ky + *line as u16);
+        if x > 0 {
+            buf.set_string(at(x - 3), y, " · ", hint);
         }
-        buf.set_stringn(at, y, part, end.saturating_sub(at) as usize, hint);
+        buf.set_stringn(at(x), y, text, width - x, *st);
     }
+}
+
+/// A column of the grid: a row of the locus, where it starts and how wide
+/// it is, its label, and its strongest link (its cutoff is a share of it).
+struct Column {
+    r: usize,
+    x: usize,
+    w: usize,
+    label: String,
+    top: f32,
+}
+
+/// Link `k`'s peak's start, for genome order (unplaced last).
+fn start_of(locus: &Locus, k: usize) -> i64 {
+    locus.links[k].place.as_ref().map_or(i64::MAX, |p| p.start)
 }
 
 /// Points of the genome-wide view, on alternate chromosomes.
@@ -399,7 +377,7 @@ pub fn render_genome(
     let mut cell_best = vec![f32::NEG_INFINITY; w * h];
     for &&(_, pos, v) in &in_sight {
         let (x, y) = (dx(pos as f32 / len), dy(v));
-        dots.set(x, y, 1.0);
+        dots.set(x, y);
         let i = (y as usize / 4).min(h - 1) * w + (x as usize / 2).min(w - 1);
         if v > cell_best[i] {
             cell_best[i] = v;
@@ -564,9 +542,10 @@ fn lines_of(buf: &Buffer) -> String {
 /// `locus` drawn as text `width` columns wide, for an agent to read.
 #[must_use]
 pub fn to_string(locus: &Locus, style: &FigureStyle, width: u16) -> String {
-    let area = Rect::new(0, 0, width, height(style.rows_of(locus).len()));
+    let ks = listed(locus, style, &style.rows_of(locus));
+    let area = Rect::new(0, 0, width, height_for(ks.len()));
     let mut buf = Buffer::empty(area);
-    render(locus, style, area, &mut buf);
+    render_listed(locus, style, ks, area, &mut buf);
     lines_of(&buf)
 }
 
@@ -577,10 +556,107 @@ mod tests {
     #[test]
     fn a_dot_lands_in_its_cell_and_bit() {
         let mut d = Dots::new(2, 1);
-        d.set(3.0, 2.0, 0.5);
+        d.set(3.0, 2.0);
         assert_eq!(d.bits, [0, 0x20]);
-        d.set(9.0, 0.0, 1.0);
+        d.set(9.0, 0.0);
         assert_eq!(d.bits, [0, 0x20], "a dot off the grid is dropped");
-        assert_eq!(d.strength[1], 0.5);
+    }
+
+    /// GENE1 at 50 kb with three links, listed out of genome order, in all
+    /// the cells and two groups: p_far under CT1's cutoff, p_near negative
+    /// there.
+    fn locus() -> Locus {
+        Locus::for_tests(
+            &[
+                ("p_mid", 49_750, 0.3),
+                ("p_far", 89_750, 0.1),
+                ("p_near", 9_750, 0.5),
+            ],
+            &[
+                ("All cells", &[0.3, 0.1, 0.5]),
+                ("CT1", &[0.8, 0.01, -0.4]),
+                ("CT2", &[0.0, 0.2, 0.1]),
+            ],
+        )
+    }
+
+    /// The grid's header line.
+    fn header(text: &str) -> &str {
+        text.lines().find(|l| l.starts_with("peak")).unwrap()
+    }
+
+    /// The grid's line for `peak`.
+    fn line_of<'a>(text: &'a str, peak: &str) -> &'a str {
+        text.lines()
+            .find(|l| l.starts_with(peak))
+            .unwrap_or_else(|| panic!("no line for {peak} in\n{text}"))
+    }
+
+    /// The cell of `line` under the header's `column`.
+    fn cell(text: &str, line: &str, column: &str) -> char {
+        let header = header(text);
+        let at = header[..header.find(column).unwrap()].chars().count();
+        // A blank cell at the end of a line is trimmed away with it.
+        line.chars().nth(at).unwrap_or(' ')
+    }
+
+    #[test]
+    fn a_locus_reads_as_a_grid_of_peaks_by_group() {
+        let text = to_string(&locus(), &FigureStyle::default(), 100);
+        let peaks: Vec<&str> = text
+            .lines()
+            .filter_map(|l| l.split_whitespace().next())
+            .filter(|w| w.starts_with("p_"))
+            .collect();
+        assert_eq!(peaks, ["p_near", "p_mid", "p_far"], "genome order\n{text}");
+        let header = header(&text);
+        for col in ["dist", "score", "All cells", "CT1", "CT2"] {
+            assert!(header.contains(col), "{col} in {header}");
+        }
+        let near = line_of(&text, "p_near");
+        assert!(near.contains("-40 kb") && near.contains("0.500"), "{near}");
+        // The strongest share of the shown rows is full; others in eighths.
+        assert_eq!(cell(&text, line_of(&text, "p_mid"), "CT1"), '█');
+        assert_eq!(cell(&text, near, "All cells"), '▅');
+        assert_eq!(cell(&text, near, "CT1"), '▄', "a negative by its size");
+        // Under the group's own cutoff, and nothing at all.
+        assert_eq!(cell(&text, line_of(&text, "p_far"), "CT1"), '·');
+        assert_eq!(cell(&text, line_of(&text, "p_mid"), "CT2"), ' ');
+    }
+
+    #[test]
+    fn a_short_grid_keeps_the_strongest_peaks() {
+        let locus = locus();
+        let style = FigureStyle::default();
+        let area = Rect::new(0, 0, 100, grid_height(&locus, &style) - 1);
+        let mut buf = Buffer::empty(area);
+        render(&locus, &style, area, &mut buf);
+        let text = lines_of(&buf);
+        assert!(!text.contains("p_far"), "the weakest goes\n{text}");
+        assert!(text.contains("p_near") && text.contains("p_mid"));
+        assert!(text.contains("+1 peak"), "{text}");
+    }
+
+    #[test]
+    fn a_long_peak_name_gives_way_to_the_values() {
+        let mut l = locus();
+        l.links[2].peak = "chr1:9750-10250_a_long_peak_name".into();
+        l.lo = -2_000_000;
+        l.tss.tss = 1_500_000;
+        let text = to_string(&l, &FigureStyle::default(), 40);
+        let near = text.lines().find(|t| t.starts_with("chr1:")).unwrap();
+        assert!(near.contains('…'), "the name cut: {near}");
+        assert!(
+            near.contains("-1.49 Mb") && near.contains("0.500"),
+            "{near}"
+        );
+    }
+
+    #[test]
+    fn groups_that_do_not_fit_are_counted() {
+        let text = to_string(&locus(), &FigureStyle::default(), 40);
+        let header = header(&text);
+        assert!(!header.contains("CT2"), "{header}");
+        assert!(text.contains("+1 group"), "{text}");
     }
 }
