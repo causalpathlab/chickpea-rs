@@ -15,6 +15,36 @@ use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use std::path::{Path, PathBuf};
 
+/// The view tools: the `tui` feature's viewer, or none without it.
+#[cfg(feature = "tui")]
+use crate::view::mcp as viewer;
+
+#[cfg(not(feature = "tui"))]
+mod viewer {
+    use legume_mcp::{Call, Content, ToolSpec};
+    use serde_json::Value;
+
+    /// No viewer: it lists no tools and answers none.
+    #[derive(Default)]
+    pub struct Viewer;
+
+    impl Viewer {
+        pub fn call(&mut self, name: &str, _: Value, _: &Call) -> anyhow::Result<Vec<Content>> {
+            unreachable!("{name}: no view tool is listed without the tui feature")
+        }
+
+        #[must_use]
+        pub fn answers(_: &str) -> bool {
+            false
+        }
+    }
+
+    #[must_use]
+    pub fn specs() -> Vec<ToolSpec> {
+        Vec::new()
+    }
+}
+
 /// The server's name, as `initialize` reports it.
 pub const SERVER: &str = "chickpea";
 
@@ -58,8 +88,7 @@ const OWN: [&str; 8] = [
 pub struct Server {
     cli: clap::Command,
     regroup: clap::Command,
-    #[cfg(feature = "tui")]
-    viewer: crate::view::mcp::Viewer,
+    viewer: viewer::Viewer,
 }
 
 impl Default for Server {
@@ -71,7 +100,6 @@ impl Default for Server {
         Server {
             cli,
             regroup,
-            #[cfg(feature = "tui")]
             viewer: Default::default(),
         }
     }
@@ -79,15 +107,11 @@ impl Default for Server {
 
 impl Handler for Server {
     fn tools(&self) -> Vec<ToolSpec> {
-        #[cfg(feature = "tui")]
-        return [specs(), crate::view::mcp::specs()].concat();
-        #[cfg(not(feature = "tui"))]
-        specs()
+        [specs(), viewer::specs()].concat()
     }
 
     fn call(&mut self, name: &str, args: Value, cx: &Call) -> anyhow::Result<Vec<Content>> {
-        #[cfg(feature = "tui")]
-        if crate::view::mcp::Viewer::answers(name) {
+        if viewer::Viewer::answers(name) {
             return self.viewer.call(name, args, cx);
         }
         let reply = match name {

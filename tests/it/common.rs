@@ -1,6 +1,5 @@
 //! Shared planted multiome fixture: two cell programs over genes with two
 //! peaks each, written as tiny RNA and ATAC zarrs.
-#![allow(dead_code)]
 
 use chickpea::p2g::cis::AbcKernel;
 use data_beans::sparse_io::{create_sparse_from_triplets, SparseIoBackend};

@@ -1,10 +1,10 @@
 //! The whole link workflow on the planted fixture.
 
-mod common;
-
+use crate::common::{
+    self, gene_positions, kernel, write_fixture, N_CELLS, N_GENES, PEAKS_PER_GENE,
+};
 use chickpea::p2g::two_track::{TwoTrackConfig, TwoTrackInput};
 use chickpea::p2g::workflow::{run_links, LinkConfig};
-use common::{gene_positions, kernel, write_fixture, N_CELLS, N_GENES, PEAKS_PER_GENE};
 use legume_numeric::matrix::parquet::read_table_columns;
 use std::collections::HashMap;
 

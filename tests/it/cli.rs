@@ -1,8 +1,6 @@
 //! `chickpea peak-to-gene` as a user runs it.
 
-mod common;
-
-use common::{write_fixture, write_gene_coords};
+use crate::common::{self, write_fixture, write_gene_coords};
 use std::process::Command;
 
 fn chickpea() -> Command {

@@ -1,8 +1,6 @@
 //! `chickpea mcp` as an agent drives it: JSON-RPC over the child's stdio.
 
-mod common;
-
-use common::{write_fixture, write_gene_coords};
+use crate::common::{self, write_fixture, write_gene_coords};
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
@@ -147,6 +145,8 @@ fn lists_its_tools() {
     ] {
         assert!(names.contains(&want), "{want} missing from {names:?}");
     }
+    let viewer = names.contains(&"view_open");
+    assert_eq!(viewer, cfg!(feature = "tui"), "view tools with tui alone");
 }
 
 #[test]

@@ -196,5 +196,5 @@ cargo install chickpea-rs --features hdf5
 The terminal screens and their sessions (`run`, `view`, `attach`,
 `sessions`, `kill`, `rename`) and the `view_*` MCP tools are the default
 `tui` feature; `--no-default-features` builds without them (`chickpea mcp`
-then serves the `p2g_*` tools alone, and a `p2g_run` job has no screen to
-watch).
+then serves the `p2g_*` and job tools without the `view_*` ones, and a
+`p2g_run` job has no screen to watch).
