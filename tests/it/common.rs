@@ -1,6 +1,5 @@
 //! Shared planted multiome fixture: two cell programs over genes with two
 //! peaks each, written as tiny RNA and ATAC zarrs.
-#![allow(dead_code)]
 
 use chickpea::p2g::cis::AbcKernel;
 use data_beans::sparse_io::{create_sparse_from_triplets, SparseIoBackend};
@@ -18,6 +17,19 @@ pub const SMALL: [(&str, &str); 7] = [
     ("feature-modules", "4"),
     ("module-only-min-rows", "30"),
 ];
+
+/// The chickpea binary these tests are built with.
+pub fn chickpea() -> std::process::Command {
+    std::process::Command::new(env!("CARGO_BIN_EXE_chickpea"))
+}
+
+/// [`SMALL`] as command-line arguments.
+pub fn small() -> Vec<String> {
+    SMALL
+        .iter()
+        .flat_map(|(flag, value)| [format!("--{flag}"), value.to_string()])
+        .collect()
+}
 
 pub const N_GENES: usize = 24;
 pub const N_CELLS: usize = 120;

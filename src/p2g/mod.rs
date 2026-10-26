@@ -7,9 +7,14 @@
 
 pub mod cis;
 pub mod context;
+pub mod groups;
 pub mod input;
+pub mod record;
+pub mod regroup;
 pub mod run;
+pub mod samples;
 pub mod two_track;
 pub mod workflow;
 
+pub use regroup::{run_regroup, RegroupArgs};
 pub use run::{run_peak_to_gene, PeakToGeneArgs};

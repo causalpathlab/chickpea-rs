@@ -1,12 +1,10 @@
 //! End to end on a planted fixture: RNA genes + ATAC peaks on one multiome
 //! axis (module-only ATAC). Cell programs separate.
 
-mod common;
-
-use chickpea::p2g::two_track::{embed_two_track, TwoTrackConfig, TwoTrackInput};
-use common::{
+use crate::common::{
     gene_positions, index, kernel, program_of, write_fixture, N_CELLS, N_GENES, PEAKS_PER_GENE,
 };
+use chickpea::p2g::two_track::{embed_two_track, TwoTrackConfig, TwoTrackInput};
 use nalgebra::DMatrix;
 
 fn cosine(a: &[f32], b: &[f32]) -> f32 {
@@ -38,9 +36,10 @@ fn programs_separate_on_the_multiome_axis() {
         module_only_min_rows: 30,
         ..TwoTrackConfig::default()
     };
+    let samples =
+        chickpea::p2g::samples::pair(&[rna.as_str().into()], &[atac.as_str().into()]).unwrap();
     let input = TwoTrackInput {
-        rna_file: &rna,
-        atac_file: &atac,
+        samples: &samples,
         batch_file: None,
         gene_positions: &genes,
         kernel: &kernel(),

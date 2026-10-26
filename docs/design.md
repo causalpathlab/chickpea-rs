@@ -51,7 +51,7 @@ gap   = mean_g var_u(ρ_ug − ã_ug)                    added as align_weight �
   identified (a direction shared by one modality's module rows is another
   intercept), so `μ` is held centred within each modality.
 - **L2 decay** (`--weight-decay`, default 1e-4): every feature row a phase-1
-  step touches — each modality's module and gene rows — shrinks by
+  step touches (each modality's module and gene rows) shrinks by
   `1 − lr·wd` before its update. Directions the units never vary in carry no
   gradient to hold them, so they decay instead of keeping their random
   start. The pseudobulk and unit rows and the biases never decay. Keep it
@@ -79,7 +79,7 @@ carries a module axis; a step split over CPU threads shares them as detached
 leaves, and their gradient goes back through the pool once.
 
 Gene-level module draws go only to modules with a gene level, each weighted by
-the unit's count share on them — the same objective, without spending draws on
+the unit's count share on them: the same objective, without spending draws on
 module-only modules.
 
 ## Link score

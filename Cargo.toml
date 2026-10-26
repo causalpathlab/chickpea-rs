@@ -1,11 +1,11 @@
 [package]
 name = "chickpea-rs"
-version = "0.6.2"
+version = "0.7.0"
 edition = "2021"
 rust-version = "1.91"
 license = "MIT"
 authors = ["Yongjin Park <ypp@stat.ubc.ca> <yongjin.park@ubc.ca>"]
-description = "Chromatin Interactions Captured by Knitting Peaks with Expression Anchors — peak-to-gene linkage"
+description = "Chromatin Interactions Captured by Knitting Peaks with Expression Anchors: peak-to-gene linkage"
 repository = "https://github.com/causalpathlab/chickpea-rs"
 homepage = "https://github.com/causalpathlab/chickpea-rs"
 readme = "README.md"
@@ -26,7 +26,16 @@ name = "chickpea"
 path = "src/main.rs"
 
 [features]
-default = []
+default = ["tui"]
+# `chickpea run`, `chickpea view` and their sessions (`chickpea attach`);
+# `p2g_run` in the background runs on `chickpea run`'s screen.
+tui = [
+    "dep:legume-tui",
+    "dep:ratatui",
+    "dep:ratatui-image",
+    "dep:image",
+    "legume-mcp/sessions",
+]
 cuda = [
     "legume-numeric/cuda",
     "graph-embedding-util/cuda",
@@ -58,3 +67,9 @@ rustc-hash = "2.1"
 legume-mcp = { version = "0.4", features = ["clap"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+
+# The terminal front ends.
+legume-tui = { version = "0.3", optional = true, features = ["form", "export", "map-display", "save", "browse"] }
+ratatui = { version = "0.30", optional = true, default-features = false, features = ["crossterm"] }
+ratatui-image = { version = "11.1", optional = true, default-features = false, features = ["crossterm"] }
+image = { version = "0.25", optional = true, default-features = false, features = ["png"] }
