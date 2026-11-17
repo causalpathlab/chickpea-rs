@@ -306,7 +306,7 @@ pub fn run_view(args: &ViewArgs) -> anyhow::Result<()> {
         );
         return export(&state, args);
     }
-    crate::tui::need_terminal(
+    legume_tui::view::need_terminal(
         "add --text COLUMNS to print the figure, or --png FILE / --pdf FILE to write it",
     )?;
     tui::run(state, &args.session.options(true))

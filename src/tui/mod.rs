@@ -1,6 +1,6 @@
 //! What the terminal front ends, `chickpea run` and `chickpea view`, share:
 //! the tool their sessions belong to, the screen modes, list hits and key
-//! hints, and the refusal to open a screen with no terminal.
+//! hints.
 
 /// The tool `chickpea run` and `chickpea view` sessions belong to: they are
 /// named `chickpea-run-1`, `chickpea-view-2`, and `chickpea attach` finds
@@ -12,27 +12,14 @@ pub const TOOL: legume_tui::Tool = legume_tui::Tool::new("chickpea");
 /// selects text in most terminals).
 #[must_use]
 pub fn modes() -> legume_tui::Modes {
-    use ratatui::crossterm::event::KeyboardEnhancementFlags;
-    legume_tui::Modes::new()
-        .keyboard_enhancement(legume_tui::Keyboard::IfSupported(
-            KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES,
-        ))
-        .mouse(legume_tui::Mouse::Buttons)
-}
-
-/// The detach and switch keys as a help line lists them; none when the
-/// screen runs plain.
-pub fn session_keys() -> impl Iterator<Item = (String, String)> {
-    legume_tui::help_keys()
-        .into_iter()
-        .map(|k| (k.key.to_lowercase(), k.short))
+    legume_tui::Modes::disambiguated().mouse(legume_tui::Mouse::Buttons)
 }
 
 /// A screen's key hints, the session's keys after them, as one line.
 #[must_use]
 pub fn key_line(keys: Vec<(String, String)>) -> String {
     keys.into_iter()
-        .chain(session_keys())
+        .chain(legume_tui::view::session_keys())
         .map(|(k, what)| format!("{k} {what}"))
         .collect::<Vec<_>>()
         .join(" · ")
@@ -72,19 +59,4 @@ pub fn wheel(m: &ratatui::crossterm::event::MouseEvent) -> Option<isize> {
 pub fn click(m: &ratatui::crossterm::event::MouseEvent) -> bool {
     use ratatui::crossterm::event::{MouseButton, MouseEventKind};
     m.kind == MouseEventKind::Down(MouseButton::Left)
-}
-
-/// Refuse to open a screen with no terminal to draw it on (input or output
-/// piped, as under an agent), saying what works `instead`. A session's own
-/// program draws on its host's terminal.
-pub fn need_terminal(instead: &str) -> anyhow::Result<()> {
-    use std::io::IsTerminal;
-    if legume_tui::in_session() {
-        return Ok(());
-    }
-    anyhow::ensure!(
-        std::io::stdin().is_terminal() && std::io::stdout().is_terminal(),
-        "no terminal to draw the screen on: {instead}"
-    );
-    Ok(())
 }

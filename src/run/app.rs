@@ -2,7 +2,7 @@
 //! and its other flags as a form, then its run.
 
 use super::data::{Data, SIDES};
-use super::pick::{file_flags, Outcome, Pick, Want};
+use super::pick::{Outcome, Pick, Want};
 use super::worker::{Ended, Job};
 use super::{checked, Step, STEPS};
 use crate::tui::{click, wheel, ListHit, TOOL};
@@ -46,8 +46,6 @@ pub struct App {
     /// The data pane, for a step with count files.
     pub data: Option<Data>,
     pub form: Form,
-    /// The form's flags that name a file to read: enter browses for one.
-    pub files: Vec<String>,
     /// The row under the cursor.
     pub at: usize,
     /// The text being typed into the row under the cursor.
@@ -108,7 +106,6 @@ impl App {
             step,
             data,
             form,
-            files: file_flags(&cmd),
             at: 0,
             editing: None,
             pick: None,
@@ -344,7 +341,7 @@ impl App {
         match f.kind {
             Kind::Flag { .. } => f.toggle(),
             Kind::Choice(_) => f.cycle(1),
-            Kind::Text if self.files.contains(&f.long) => {
+            Kind::Text if f.takes_path() => {
                 let many = f.many != Many::One;
                 let at = if many {
                     f.value.split([',', ' ']).find(|v| !v.is_empty())
@@ -448,7 +445,7 @@ impl App {
 
 /// Run the screen for `args`.
 pub fn run(args: &super::RunArgs) -> anyhow::Result<()> {
-    crate::tui::need_terminal(
+    legume_tui::view::need_terminal(
         "run the step itself (chickpea peak-to-gene ...), or p2g_run on chickpea mcp",
     )?;
     let (step, argv): (&'static Step, &[String]) = match args.step.split_first() {
@@ -497,6 +494,9 @@ pub fn run(args: &super::RunArgs) -> anyhow::Result<()> {
                 && (ended.is_some() || session.stop_requested())
             {
                 return Ok(ended);
+            }
+            if let Some(pick) = app.pick.as_mut() {
+                pick.tick();
             }
             session.status(&status(&app));
             session.draw(terminal, |f| super::draw::draw(f, &app))?;

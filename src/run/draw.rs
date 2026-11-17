@@ -8,9 +8,9 @@ use super::worker::Ended;
 use crate::tui::{key_line, ListHit};
 use legume_tui::browse::{first_visible, shown};
 use legume_tui::child::gauge;
-use legume_tui::chrome::tail;
 use legume_tui::form::{row_line, Kind};
-use legume_tui::look::Look;
+use legume_tui::text::tail;
+use legume_tui::Look;
 use legume_tui::RUN_KEY;
 use ratatui::layout::{Constraint, Layout, Margin, Rect};
 use ratatui::style::{Modifier, Style};
@@ -225,7 +225,7 @@ fn form(f: &mut Frame, app: &App, area: Rect, look: &Look, drawn: &mut Drawn) {
     let how = match field.kind {
         Kind::Flag { .. } => "enter toggles",
         Kind::Choice(_) => "←/→ or enter changes",
-        Kind::Text if app.files.contains(&field.long) => {
+        Kind::Text if field.takes_path() => {
             "enter browses for the file, e types it (empty: default)"
         }
         Kind::Text => "enter types a value (empty: default)",
