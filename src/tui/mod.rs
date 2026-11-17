@@ -1,8 +1,6 @@
 //! What the terminal front ends, `chickpea run` and `chickpea view`, share:
-//! the tool their sessions belong to, the screen modes, and how a screen
-//! takes the terminal and gives it back.
-
-use std::path::Path;
+//! the tool their sessions belong to, the screen modes, list hits and key
+//! hints, and the refusal to open a screen with no terminal.
 
 /// The tool `chickpea run` and `chickpea view` sessions belong to: they are
 /// named `chickpea-run-1`, `chickpea-view-2`, and `chickpea attach` finds
@@ -76,16 +74,6 @@ pub fn click(m: &ratatui::crossterm::event::MouseEvent) -> bool {
     m.kind == MouseEventKind::Down(MouseButton::Left)
 }
 
-/// The key that runs what a screen set up, as in senna and pinto: ctrl+r.
-pub const RUN_KEY: &str = "ctrl+r";
-
-/// Whether `k` is [`RUN_KEY`].
-#[must_use]
-pub fn is_run_key(k: &ratatui::crossterm::event::KeyEvent) -> bool {
-    use ratatui::crossterm::event::{KeyCode, KeyModifiers};
-    k.code == KeyCode::Char('r') && k.modifiers.contains(KeyModifiers::CONTROL)
-}
-
 /// Refuse to open a screen with no terminal to draw it on (input or output
 /// piped, as under an agent), saying what works `instead`. A session's own
 /// program draws on its host's terminal.
@@ -99,34 +87,4 @@ pub fn need_terminal(instead: &str) -> anyhow::Result<()> {
         "no terminal to draw the screen on: {instead}"
     );
     Ok(())
-}
-
-/// Run `f` on the whole terminal of `session` and give the terminal back
-/// however it ends. Logging is off meanwhile: log lines would land over the
-/// screen. An error it ends with is held where it is seen
-/// ([`legume_tui::Session::hold_error`]).
-pub fn with_terminal<T>(
-    session: &legume_tui::Session,
-    f: impl FnOnce(&mut ratatui::DefaultTerminal) -> anyhow::Result<T>,
-) -> anyhow::Result<T> {
-    let _quiet = legume_tui::logs::quiet();
-    let mut terminal = session.terminal_with(modes())?;
-    let out = f(&mut terminal);
-    if let Err(e) = &out {
-        let _ = session.hold_error(&mut terminal, e);
-    }
-    session.restore();
-    out
-}
-
-/// `p` as shown: relative to the working directory when it is under it.
-#[must_use]
-pub fn shown(p: &Path) -> String {
-    std::env::current_dir()
-        .ok()
-        .and_then(|cwd| p.strip_prefix(cwd).ok().map(Path::to_path_buf))
-        .filter(|r| !r.as_os_str().is_empty())
-        .unwrap_or_else(|| p.to_path_buf())
-        .to_string_lossy()
-        .into_owned()
 }

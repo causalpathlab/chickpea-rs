@@ -5,11 +5,11 @@ use super::data::{Data, SIDES};
 use super::pick::{file_flags, Outcome, Pick, Want};
 use super::worker::{Ended, Job};
 use super::{checked, Step, STEPS};
-use crate::tui::{click, wheel, ListHit};
-use crate::tui::{is_run_key, TOOL};
+use crate::tui::{click, wheel, ListHit, TOOL};
 use legume_mcp::job::{End, Reporter};
+use legume_tui::browse::{moved, shown};
 use legume_tui::form::{Form, Kind, Many};
-use legume_tui::Round;
+use legume_tui::{is_run_key, Round};
 use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, MouseEvent};
 use std::cell::RefCell;
 use std::path::PathBuf;
@@ -159,7 +159,7 @@ impl App {
             Ok(made) => match made.iter().find(|p| p.exists()) {
                 Some(there) => Some(format!(
                     "{} exists: a run is not written over; change --out",
-                    crate::tui::shown(there)
+                    shown(there)
                 )),
                 None => match Job::start(self.command(), env) {
                     Ok(job) => {
@@ -218,8 +218,8 @@ impl App {
             }
             Want::Flag { long, .. } => {
                 if let Some(field) = self.form.get_mut(&long).filter(|_| !files.is_empty()) {
-                    let shown: Vec<String> = files.iter().map(|f| crate::tui::shown(f)).collect();
-                    field.set_text(&shown.join(" "));
+                    let names: Vec<String> = files.iter().map(|f| shown(f)).collect();
+                    field.set_text(&names.join(" "));
                 }
             }
         }
@@ -295,8 +295,8 @@ impl App {
         let Some(d) = self.data.as_mut() else { return };
         let n = d.pairs.len();
         match k.code {
-            KeyCode::Down | KeyCode::Char('j') => d.at = (d.at + 1).min(n),
-            KeyCode::Up | KeyCode::Char('k') => d.at = d.at.saturating_sub(1),
+            KeyCode::Down | KeyCode::Char('j') => d.at = moved(d.at, 1, n),
+            KeyCode::Up | KeyCode::Char('k') => d.at = moved(d.at, -1, n),
             KeyCode::Left | KeyCode::Char('h') => d.col = d.col.saturating_sub(1),
             KeyCode::Right | KeyCode::Char('l') => d.col = (d.col + 1).min(SIDES.len() - 1),
             KeyCode::Char('a') | KeyCode::Char('+') => self.browse(Want::Data, None),
@@ -318,10 +318,10 @@ impl App {
         let n = self.form.fields.len();
         match k.code {
             KeyCode::Char('q') | KeyCode::Esc => self.quit_key(),
-            KeyCode::Down | KeyCode::Char('j') => self.at = (self.at + 1).min(n.saturating_sub(1)),
-            KeyCode::Up | KeyCode::Char('k') => self.at = self.at.saturating_sub(1),
-            KeyCode::PageDown => self.at = (self.at + 10).min(n.saturating_sub(1)),
-            KeyCode::PageUp => self.at = self.at.saturating_sub(10),
+            KeyCode::Down | KeyCode::Char('j') => self.at = moved(self.at, 1, n.saturating_sub(1)),
+            KeyCode::Up | KeyCode::Char('k') => self.at = moved(self.at, -1, n.saturating_sub(1)),
+            KeyCode::PageDown => self.at = moved(self.at, 10, n.saturating_sub(1)),
+            KeyCode::PageUp => self.at = moved(self.at, -10, n.saturating_sub(1)),
             KeyCode::Char('d') => {
                 self.form.fields[self.at].reset();
                 self.recheck();
@@ -474,7 +474,7 @@ pub fn run(args: &super::RunArgs) -> anyhow::Result<()> {
         }
     }
     let mut sent = 0usize;
-    let end = crate::tui::with_terminal(&session, |terminal| {
+    let end: anyhow::Result<_> = session.with_terminal(crate::tui::modes(), |terminal| {
         loop {
             // Lines and end taken under one lock, so no last line is left
             // unsent, and written after it.

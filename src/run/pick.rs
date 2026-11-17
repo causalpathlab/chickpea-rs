@@ -4,7 +4,7 @@
 //! lists; this keeps the marks and says what is wanted.
 
 use crate::tui::ListHit;
-use legume_tui::browse::{first_visible, tilde, Browser, Nav};
+use legume_tui::browse::{first_visible, size, tilde, Browser, Nav};
 use legume_tui::look::Look;
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::{Constraint, Layout, Margin, Rect};
@@ -86,20 +86,6 @@ fn wanted(long: &str) -> (&'static str, fn(&str) -> bool) {
         }),
         _ => ("files", |_| true),
     }
-}
-
-/// A file's size, as listed beside it.
-fn size(path: &Path) -> Option<String> {
-    let n = std::fs::metadata(path).ok()?.len() as f64;
-    let (v, unit) = [(1e9, "GB"), (1e6, "MB"), (1e3, "kB")]
-        .into_iter()
-        .find(|&(d, _)| n >= d)
-        .map_or((n, "B"), |(d, u)| (n / d, u));
-    Some(if unit == "B" {
-        format!("{n} B")
-    } else {
-        format!("{v:.1} {unit}")
-    })
 }
 
 impl Pick {
