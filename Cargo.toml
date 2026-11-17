@@ -1,13 +1,12 @@
 [package]
 name = "chickpea-rs"
-version = "0.7.1"
+version = "0.7.4"
 edition = "2021"
 rust-version = "1.91"
 license = "MIT"
 authors = ["Yongjin Park <ypp@stat.ubc.ca> <yongjin.park@ubc.ca>"]
 description = "Chromatin Interactions Captured by Knitting Peaks with Expression Anchors: peak-to-gene linkage"
 repository = "https://github.com/causalpathlab/chickpea-rs"
-homepage = "https://github.com/causalpathlab/chickpea-rs"
 readme = "README.md"
 keywords = ["genomics", "single-cell", "multiome", "peak-to-gene", "atac"]
 categories = ["science", "command-line-utilities"]
