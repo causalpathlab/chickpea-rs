@@ -6,7 +6,7 @@ use super::data::{Measure, Summary};
 use super::State;
 use crate::tui::{click, key_line, wheel, ListHit, TOOL};
 use legume_tui::browse::{moved, shown};
-use legume_tui::look::Look;
+use legume_tui::Look;
 use legume_tui::Round;
 use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, MouseEvent};
 use ratatui::layout::{Constraint, Layout, Margin, Rect};

@@ -1,6 +1,6 @@
 [package]
 name = "chickpea-rs"
-version = "0.7.10"
+version = "0.7.16"
 edition = "2021"
 rust-version = "1.91"
 license = "MIT"
@@ -63,12 +63,12 @@ log = "0.4"
 rustc-hash = "2.1"
 
 # `chickpea mcp`: the Model Context Protocol on stdio.
-legume-mcp = { version = "0.4", features = ["clap"] }
+legume-mcp = { version = "0.6", features = ["clap"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
 # The terminal front ends.
-legume-tui = { version = "0.3.18", optional = true, features = ["form", "export", "map-display", "save", "browse"] }
+legume-tui = { version = "0.4", optional = true, features = ["form", "export", "map-display", "save", "browse", "view"] }
 ratatui = { version = "0.30", optional = true, default-features = false, features = ["crossterm"] }
 ratatui-image = { version = "11.1", optional = true, default-features = false, features = ["crossterm"] }
 image = { version = "0.25", optional = true, default-features = false, features = ["png"] }

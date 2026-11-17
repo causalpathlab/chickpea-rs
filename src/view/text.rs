@@ -8,8 +8,9 @@
 use super::data::{Genome, Locus};
 use super::figure::{bp_text, drawn, row_strongest, scales, short, summary_text};
 use super::figure::{GenomeView, Style as FigureStyle};
-use legume_tui::chrome::{self, rgb};
+use legume_tui::chrome::rgb;
 use legume_tui::map::colour::Srgb;
+use legume_tui::text;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
@@ -206,7 +207,7 @@ fn render_listed(
     let columns: Vec<Column> = rows
         .iter()
         .scan(value_x + value_w, |x, &r| {
-            let label = chrome::short(&locus.rows[r].label, GROUP_W);
+            let label = text::short(&locus.rows[r].label, GROUP_W);
             let w = label.chars().count().max(3);
             let col = Column {
                 x: *x + GAP,
@@ -233,7 +234,7 @@ fn render_listed(
     }
     for (i, &k) in ks.iter().enumerate() {
         let y = y + 1 + i as u16;
-        let peak = chrome::middle(&locus.links[k].peak, peak_w);
+        let peak = text::middle(&locus.links[k].peak, peak_w);
         buf.set_string(at(0), y, peak, Style::default());
         buf.set_string(at(dist_x), y, right(&dist[i], dist_w), hint);
         buf.set_string(at(value_x), y, right(&value[i], value_w), Style::default());
