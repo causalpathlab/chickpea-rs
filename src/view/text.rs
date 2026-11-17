@@ -8,17 +8,18 @@
 use super::data::{Genome, Locus};
 use super::figure::{bp_text, drawn, row_strongest, scales, short, summary_text};
 use super::figure::{GenomeView, Style as FigureStyle};
-use legume_tui::chrome;
+use legume_tui::chrome::{self, rgb};
+use legume_tui::map::colour::Srgb;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 
 /// Positive links, at their strongest.
-const ARC: (u8, u8, u8) = (178, 120, 230);
+const ARC: Srgb = [178, 120, 230];
 /// Negative links.
-const ARC_NEG: (u8, u8, u8) = (230, 140, 100);
+const ARC_NEG: Srgb = [230, 140, 100];
 /// The weakest link shown.
-const FAINT: (u8, u8, u8) = (90, 90, 100);
+const FAINT: Srgb = [90, 90, 100];
 const HINT: Color = Color::Rgb(120, 120, 128);
 /// Eighth blocks, empty to full.
 const BLOCKS: [char; 9] = [' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
@@ -66,13 +67,9 @@ impl Dots {
     }
 }
 
-fn rgb(c: (u8, u8, u8)) -> Color {
-    Color::Rgb(c.0, c.1, c.2)
-}
-
-fn mix(a: (u8, u8, u8), b: (u8, u8, u8), t: f32) -> Color {
+fn mix(a: Srgb, b: Srgb, t: f32) -> Color {
     let l = |x: u8, y: u8| (f32::from(x) + (f32::from(y) - f32::from(x)) * t.clamp(0.0, 1.0)) as u8;
-    Color::Rgb(l(a.0, b.0), l(a.1, b.1), l(a.2, b.2))
+    rgb(std::array::from_fn(|i| l(a[i], b[i])))
 }
 
 /// `n` and `what`, plural past one: `1 peak`, `3 peaks`.
@@ -317,8 +314,8 @@ fn start_of(locus: &Locus, k: usize) -> i64 {
 
 /// Points of the genome-wide view, on alternate chromosomes.
 const POINT: [Color; 2] = [Color::Rgb(90, 140, 210), Color::Rgb(150, 160, 175)];
-/// The focus gene.
-const FOCUS: Color = Color::Rgb(178, 120, 230);
+/// The focus gene, in the colour of positive links.
+const FOCUS: Srgb = ARC;
 /// Genes listed under the genome-wide view at most.
 const LISTED: usize = 8;
 
@@ -403,7 +400,7 @@ pub fn render_genome(
             let ch = char::from_u32(0x2800 + u32::from(dots.bits[i])).unwrap_or(' ');
             let mut st = Style::default().fg(POINT[cell_chrom[i] % 2]);
             if focus.is_some_and(|(_, fx, fy)| fx == cx && fy == cy) {
-                st = Style::default().fg(FOCUS).add_modifier(Modifier::BOLD);
+                st = Style::default().fg(rgb(FOCUS)).add_modifier(Modifier::BOLD);
             }
             buf[(x0 + cx as u16, y0 + cy as u16)]
                 .set_char(ch)
@@ -448,7 +445,7 @@ pub fn render_genome(
             y0 + fy as u16,
             name.as_ref(),
             w - at,
-            Style::default().fg(FOCUS).add_modifier(Modifier::BOLD),
+            Style::default().fg(rgb(FOCUS)).add_modifier(Modifier::BOLD),
         );
     }
     // The chromosomes under it.

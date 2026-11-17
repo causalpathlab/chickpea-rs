@@ -562,19 +562,19 @@ fn write_genes(
 
 fn write_links(out: &str, emb: &TwoTrackEmbedding, w: &[f32]) -> anyhow::Result<()> {
     let pairs = &emb.pairs;
-    let mut gene: Vec<Box<str>> = Vec::with_capacity(pairs.n_pairs());
-    for g in 0..pairs.n_genes() {
-        gene.extend(pairs.gene(g).map(|_| emb.rna_genes[g].clone()));
-    }
+    // Indices beside the names, as in `links_by_cluster`: a name may be
+    // several genes'.
+    let gene_idx = gene_of_pair(pairs);
+    let gene: Vec<Box<str>> = gene_idx
+        .iter()
+        .map(|&g| emb.rna_genes[g as usize].clone())
+        .collect();
     let peak: Vec<Box<str>> = pairs
         .peak
         .iter()
         .map(|&p| emb.peak_names[p as usize].clone())
         .collect();
     let score: Vec<f32> = w.iter().zip(&emb.gate_corr).map(|(w, c)| w * c).collect();
-    // Indices beside the names, as in `links_by_cluster`: a name may be
-    // several genes'.
-    let gene_idx = gene_of_pair(pairs);
     let peak_idx: Vec<i32> = pairs.peak.iter().map(|&p| p as i32).collect();
     write_table(
         &table(out, LINKS),
