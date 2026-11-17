@@ -6,6 +6,7 @@
 //! the words of the names.
 
 use crate::p2g::samples::{self, Holds};
+use legume_tui::browse::shown;
 use legume_tui::form::{emit, Many};
 use std::path::{Path, PathBuf};
 
@@ -93,7 +94,7 @@ impl Data {
                     .pairs
                     .iter()
                     .filter_map(|p| p.get(s))
-                    .map(|p| crate::tui::shown(p))
+                    .map(|p| shown(p))
                     .collect();
                 emit(&format!("--{}", s.long()), Many::Listed, vs)
             })

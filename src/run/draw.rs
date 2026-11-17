@@ -5,12 +5,13 @@
 use super::app::{App, Drawn, Pane};
 use super::data::SIDES;
 use super::worker::Ended;
-use crate::tui::{key_line, ListHit, RUN_KEY};
-use legume_tui::browse::first_visible;
+use crate::tui::{key_line, ListHit};
+use legume_tui::browse::{first_visible, shown};
 use legume_tui::child::gauge;
 use legume_tui::chrome::tail;
 use legume_tui::form::{row_line, Kind};
 use legume_tui::look::Look;
+use legume_tui::RUN_KEY;
 use ratatui::layout::{Constraint, Layout, Margin, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -121,18 +122,18 @@ fn data(f: &mut Frame, app: &App, area: Rect, look: &Look, drawn: &mut Drawn) {
         ));
     }
     f.render_widget(Paragraph::new(Line::from(head)), titles);
-    let shown = list.height as usize;
+    let rows = list.height as usize;
     let total = d.pairs.len() + 1;
-    let first = first_visible(d.at, total, shown);
+    let first = first_visible(d.at, total, rows);
     drawn.list = ListHit { rows: list, first };
     let cut = |p: &std::path::Path, w: usize| -> String {
         let s = match (common, p.file_name()) {
             (Some(_), Some(name)) => name.to_string_lossy().into_owned(),
-            _ => crate::tui::shown(p),
+            _ => shown(p),
         };
         tail(&s, w)
     };
-    let lines: Vec<Line> = (first..total.min(first + shown))
+    let lines: Vec<Line> = (first..total.min(first + rows))
         .map(|i| {
             let mark = if i == d.at { "▸ " } else { "  " };
             let Some(p) = d.pairs.get(i) else {
@@ -303,10 +304,7 @@ fn command(f: &mut Frame, app: &App, area: Rect, look: &Look) {
             )));
         }
         (None, Ok(made)) => {
-            let first = made
-                .first()
-                .map(|p| crate::tui::shown(p))
-                .unwrap_or_default();
+            let first = made.first().map(|p| shown(p)).unwrap_or_default();
             text.push(Line::from(Span::styled(
                 format!("writes {first} and {} more", made.len().saturating_sub(1)),
                 look.hint,

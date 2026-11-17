@@ -5,6 +5,7 @@
 use super::data::{Measure, Summary};
 use super::State;
 use crate::tui::{click, key_line, wheel, ListHit, TOOL};
+use legume_tui::browse::{moved, shown};
 use legume_tui::look::Look;
 use legume_tui::Round;
 use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, MouseEvent};
@@ -243,10 +244,10 @@ impl Screen {
         let n = self.ranked.len();
         match k.code {
             KeyCode::Char('q') | KeyCode::Esc => self.quit = true,
-            KeyCode::Down | KeyCode::Char('j') => self.at = (self.at + 1).min(n.saturating_sub(1)),
-            KeyCode::Up | KeyCode::Char('k') => self.at = self.at.saturating_sub(1),
-            KeyCode::PageDown => self.at = (self.at + 20).min(n.saturating_sub(1)),
-            KeyCode::PageUp => self.at = self.at.saturating_sub(20),
+            KeyCode::Down | KeyCode::Char('j') => self.at = moved(self.at, 1, n.saturating_sub(1)),
+            KeyCode::Up | KeyCode::Char('k') => self.at = moved(self.at, -1, n.saturating_sub(1)),
+            KeyCode::PageDown => self.at = moved(self.at, 20, n.saturating_sub(1)),
+            KeyCode::PageUp => self.at = moved(self.at, -20, n.saturating_sub(1)),
             KeyCode::Home => self.at = 0,
             KeyCode::Char('/') => self.search = Some(String::new()),
             KeyCode::Char('m') => {
@@ -380,7 +381,7 @@ impl Screen {
             },
         );
         self.note = Some(match saved {
-            Ok(()) => format!("wrote {}", crate::tui::shown(&path)),
+            Ok(()) => format!("wrote {}", shown(&path)),
             Err(e) => format!("the PDF: {e:#}"),
         });
     }
@@ -390,7 +391,7 @@ impl Screen {
 pub fn run(state: State, opts: &legume_tui::Options) -> anyhow::Result<()> {
     let session = TOOL.session("view", opts)?;
     let mut screen = Screen::new(state);
-    crate::tui::with_terminal(&session, |terminal| {
+    session.with_terminal(crate::tui::modes(), |terminal| {
         // The terminal is fresh: its answer about pictures is this one's.
         session.take_repaint();
         screen.repick(&session);
