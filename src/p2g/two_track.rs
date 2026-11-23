@@ -323,7 +323,16 @@ pub fn embed_two_track(
         }),
     };
     let pseudobulks = data_beans::unified::build_embedding_pseudobulks(&mut unified, &pb_args)?;
-    let out = super::fit_input::fit_on_pseudobulks(&unified, &pseudobulks, config)?;
+    let out = ge::fit(
+        ge::FitInput {
+            cells: &unified,
+            batch_membership: &unified.batch_membership,
+            batch_names: &unified.batch_names,
+            feature_modality: unified.feature_modality.clone(),
+            pseudobulks: &pseudobulks,
+        },
+        config,
+    )?;
     drop(pseudobulks);
 
     let feat = nalgebra::DMatrix::<f32>::from_tensor(&out.model.e_feat)?;
