@@ -13,6 +13,7 @@ pub mod record;
 pub mod regroup;
 pub mod run;
 pub mod samples;
+mod training_data;
 pub mod two_track;
 pub mod workflow;
 

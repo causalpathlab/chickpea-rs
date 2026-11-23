@@ -147,8 +147,8 @@ pub fn embed_two_track(
     );
 
     // One axis: RNA genes ∪ ATAC peaks (bge multiome).
-    let mut unified =
-        data_beans::unified::load_unified_data(data_beans::unified::LoadUnifiedArgs {
+    let mut unified = data_beans::bipartite_graph_embedding_input::load_bipartite_embedding_cells(
+        data_beans::bipartite_graph_embedding_input::LoadBipartiteEmbeddingCellsArgs {
             data_files: input
                 .samples
                 .iter()
@@ -176,7 +176,8 @@ pub fn embed_two_track(
                     .collect()
             }),
             ..Default::default()
-        })?;
+        },
+    )?;
 
     // A mixed file is read as both sides of its sample: its genes go on
     // the RNA side only, and its peaks on the ATAC side.
@@ -272,7 +273,7 @@ pub fn embed_two_track(
     let h = cfg.embedding_dim;
     let device = cfg.device.to_device(cfg.device_no)?;
     info!("Embedding device: {} (#{})", cfg.device, cfg.device_no);
-    let pb_args = data_beans::unified::EmbeddingPseudobulkArgs {
+    let pb_args = data_beans::bipartite_graph_embedding_input::BipartiteEmbeddingPseudobulkArgs {
         proj_dim: cfg.proj_dim,
         block_size: None,
         hvg_weights: None,
@@ -322,14 +323,18 @@ pub fn embed_two_track(
             module_only_modules: Some(cfg.peak_modules),
         }),
     };
-    let pseudobulks = data_beans::unified::build_embedding_pseudobulks(&mut unified, &pb_args)?;
+    let pseudobulks =
+        data_beans::bipartite_graph_embedding_input::build_bipartite_embedding_pseudobulks(
+            &mut unified,
+            &pb_args,
+        )?;
     let out = ge::fit(
         ge::FitInput {
-            cells: &unified,
+            cells: &super::training_data::Cells(&unified),
             batch_membership: &unified.batch_membership,
             batch_names: &unified.batch_names,
             feature_modality: unified.feature_modality.clone(),
-            pseudobulks: &pseudobulks,
+            pseudobulks: &super::training_data::Pseudobulks(&pseudobulks),
         },
         config,
     )?;
