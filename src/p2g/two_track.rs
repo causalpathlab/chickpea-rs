@@ -147,35 +147,37 @@ pub fn embed_two_track(
     );
 
     // One axis: RNA genes ∪ ATAC peaks (bge multiome).
-    let mut unified = ge::load_unified_data(ge::LoadUnifiedArgs {
-        data_files: input
-            .samples
-            .iter()
-            .flat_map(|s| [s.rna.clone(), s.atac.clone()])
-            .collect(),
-        batch_files: input.batch_file.map(|b| vec![b.into()]),
-        // Exact: RNA symbols and peak loci are disjoint names. Mixed would
-        // rewrite `GENE_1` → `1` via the gene-symbol rule and break lookup.
-        feature_kind: Some(ge::FeatureNameKind::Exact),
-        column_alignment: data_beans::sparse_io_vector::ColumnAlignment::Union,
-        per_file_feature_suffix: Some(
-            input
+    let mut unified = data_beans::bipartite_graph_embedding_input::load_bipartite_embedding_cells(
+        data_beans::bipartite_graph_embedding_input::LoadBipartiteEmbeddingCellsArgs {
+            data_files: input
                 .samples
                 .iter()
-                .flat_map(|_| [RNA_TAG.into(), ATAC_TAG.into()])
+                .flat_map(|s| [s.rna.clone(), s.atac.clone()])
                 .collect(),
-        ),
-        // Several samples' cells as {barcode}@{sample}: one barcode in two
-        // samples is two cells. The tags are the batches unless given.
-        per_file_barcode_suffix: (input.samples.len() > 1).then(|| {
-            input
-                .samples
-                .iter()
-                .flat_map(|s| [s.name.clone(), s.name.clone()])
-                .collect()
-        }),
-        ..Default::default()
-    })?;
+            batch_files: input.batch_file.map(|b| vec![b.into()]),
+            // Exact: RNA symbols and peak loci are disjoint names. Mixed would
+            // rewrite `GENE_1` → `1` via the gene-symbol rule and break lookup.
+            feature_kind: Some(data_beans::aux::feature_names::FeatureNameKind::Exact),
+            column_alignment: data_beans::sparse_io_vector::ColumnAlignment::Union,
+            per_file_feature_suffix: Some(
+                input
+                    .samples
+                    .iter()
+                    .flat_map(|_| [RNA_TAG.into(), ATAC_TAG.into()])
+                    .collect(),
+            ),
+            // Several samples' cells as {barcode}@{sample}: one barcode in two
+            // samples is two cells. The tags are the batches unless given.
+            per_file_barcode_suffix: (input.samples.len() > 1).then(|| {
+                input
+                    .samples
+                    .iter()
+                    .flat_map(|s| [s.name.clone(), s.name.clone()])
+                    .collect()
+            }),
+            ..Default::default()
+        },
+    )?;
 
     // A mixed file is read as both sides of its sample: its genes go on
     // the RNA side only, and its peaks on the ATAC side.
@@ -271,26 +273,30 @@ pub fn embed_two_track(
     let h = cfg.embedding_dim;
     let device = cfg.device.to_device(cfg.device_no)?;
     info!("Embedding device: {} (#{})", cfg.device, cfg.device_no);
-    let config = ge::FitConfig {
-        embedding_dim: h,
-        anchor_batches: None,
-        bulk_batches: None,
-        emit_finest_collapse: false,
+    let pb_args = data_beans::bipartite_graph_embedding_input::BipartiteEmbeddingPseudobulkArgs {
+        proj_dim: cfg.proj_dim,
+        block_size: None,
+        hvg_weights: None,
+        projection_rows: None,
+        seed: cfg.seed,
         num_levels: cfg.num_levels,
         sort_dim: cfg.sort_dim,
-        partition: None,
         knn_pb_samples: 10,
         num_opt_iter: 30,
-        proj_dim: cfg.proj_dim,
+        refine: data_beans::alg::refine_multilevel::RefineParams::default(),
+        anchor_batches: None,
+        bulk_batches: None,
+        strata: None,
+        partition: None,
+    };
+    let config = ge::FitConfig {
+        embedding_dim: h,
         epochs: cfg.epochs,
         batches_per_epoch: None,
         batch_size: 1024,
         learning_rate: 0.01,
         seed: cfg.seed,
         device,
-        block_size: None,
-        hvg_weights: None,
-        refine: ge::RefineParams::default(),
         weight_decay: cfg.weight_decay,
         // The feature rows only: the pseudobulk and unit rows never decay.
         unit_weight_decay: Some(0.0),
@@ -307,7 +313,6 @@ pub fn embed_two_track(
         offset_rank: 1,
         preset_features: None,
         preset_offsets: Vec::new(),
-        strata: None,
         cis_gates,
         flat_module_only: true,
         multiome: Some(ge::MultiomeOptions {
@@ -318,7 +323,22 @@ pub fn embed_two_track(
             module_only_modules: Some(cfg.peak_modules),
         }),
     };
-    let out = ge::fit(&mut unified, config)?;
+    let pseudobulks =
+        data_beans::bipartite_graph_embedding_input::build_bipartite_embedding_pseudobulks(
+            &mut unified,
+            &pb_args,
+        )?;
+    let out = ge::fit(
+        ge::FitInput {
+            cells: &super::training_data::Cells(&unified),
+            batch_membership: &unified.batch_membership,
+            batch_names: &unified.batch_names,
+            feature_modality: unified.feature_modality.clone(),
+            pseudobulks: &super::training_data::Pseudobulks(&pseudobulks),
+        },
+        config,
+    )?;
+    drop(pseudobulks);
 
     let feat = nalgebra::DMatrix::<f32>::from_tensor(&out.model.e_feat)?;
     anyhow::ensure!(
