@@ -7,6 +7,7 @@
 
 pub mod cis;
 pub mod context;
+mod fit_input;
 pub mod groups;
 pub mod input;
 pub mod record;
