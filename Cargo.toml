@@ -1,6 +1,6 @@
 [package]
 name = "chickpea-rs"
-version = "0.7.19"
+version = "0.7.20"
 edition = "2021"
 rust-version = "1.91"
 license = "MIT"
@@ -46,7 +46,7 @@ metal = [
 hdf5 = ["data-beans/hdf5"]
 
 [dependencies]
-data-beans = { version = "0.14", features = ["aux", "alg"] }
+data-beans = { version = "0.14.3", features = ["aux", "alg"] }
 legume-numeric = { version = "0.10", features = ["matrix", "param", "candle", "mcmc"] }
 genomic-data = { version = "0.6", package = "legume-genomic-types" }
 graph-embedding-util = { version = "0.14", package = "legume-graph-embedding" }
@@ -63,12 +63,12 @@ log = "0.4"
 rustc-hash = "2.1"
 
 # `chickpea mcp`: the Model Context Protocol on stdio.
-legume-mcp = { version = "0.6", features = ["clap"] }
+legume-mcp = { version = "0.7", features = ["clap"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
 # The terminal front ends.
-legume-tui = { version = "0.4", optional = true, features = ["form", "export", "map-display", "save", "browse", "view"] }
+legume-tui = { version = "0.5", optional = true, features = ["form", "export", "map-display", "save", "browse", "view"] }
 ratatui = { version = "0.30", optional = true, default-features = false, features = ["crossterm"] }
 ratatui-image = { version = "11.1", optional = true, default-features = false, features = ["crossterm"] }
 image = { version = "0.25", optional = true, default-features = false, features = ["png"] }
