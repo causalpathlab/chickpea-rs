@@ -66,6 +66,11 @@ pub struct PeakToGeneArgs {
     )]
     batch: Option<Box<str>>,
 
+    /// Per-cell covariates as a second axis of batch, scored on the RNA
+    /// rows (shared with senna and pinto).
+    #[command(flatten)]
+    covariate: genomic_data::covariate::CovariateArgs,
+
     /// Shared cell QC, driven by the RNA counts (on by default; `--no-qc` to
     /// disable). Failed cells still inform the embedding, but are left out of
     /// clustering, accessibility rates and every cell table.
@@ -263,18 +268,27 @@ impl PeakToGeneArgs {
     }
 
     /// Every file a run with output prefix `out` writes, whatever its
-    /// flags: its tables and its record.
+    /// flags: its tables, its record and the covariate files it may write
+    /// (or remove), so no prefix that holds them is taken for a new run.
     #[must_use]
     pub fn outputs_of(out: &str) -> Vec<std::path::PathBuf> {
+        let mut made = Self::always_of(out);
+        made.extend(crate::p2g::covariate::outputs_of(out));
+        made
+    }
+
+    /// The files every run at `out` writes: its tables and its record (the
+    /// covariate files only when cells are binned).
+    fn always_of(out: &str) -> Vec<std::path::PathBuf> {
         let mut made = tables(out);
         made.push(run_record(out).into());
         made
     }
 
-    /// Every file the run writes: its tables, its record, and the QC report
-    /// when QC runs and one is asked for.
+    /// Every file the run is sure to write: its tables, its record, and the
+    /// QC report when QC runs and one is asked for.
     pub fn outputs(&self) -> Vec<std::path::PathBuf> {
-        let mut made = Self::outputs_of(&self.out);
+        let mut made = Self::always_of(&self.out);
         if self.qc.to_config().is_some() {
             made.extend(self.qc.qc_report.as_deref().map(Into::into));
         }
@@ -380,6 +394,7 @@ pub fn run_peak_to_gene(args: &PeakToGeneArgs) -> anyhow::Result<()> {
             seed: args.seed,
             device: args.device.clone(),
             device_no: args.device_no,
+            covariate: args.covariate.clone(),
         },
         n_clusters: args.n_clusters,
         groups,
@@ -454,6 +469,8 @@ mod tests {
         let same = |raw: Option<&str>, v: &serde_json::Value| match (raw, v) {
             (None, serde_json::Value::Null) => true,
             (Some(r), serde_json::Value::String(s)) => r == s,
+            // A list flag (`--covariate all`) kept as its words.
+            (Some(r), serde_json::Value::Array(a)) => a.first().is_some_and(|w| w == r),
             (Some(r), serde_json::Value::Bool(b)) => r.parse() == Ok(*b),
             (Some(r), serde_json::Value::Number(n)) => r
                 .parse::<f64>()
@@ -462,8 +479,16 @@ mod tests {
         };
         for arg in cmd.get_arguments() {
             let Some(long) = arg.get_long() else { continue };
-            let key = long.replace('-', "_");
-            let kept = flags.get(&key).or_else(|| flags["qc"].get(&key));
+            // The field's name, as serde keeps it (`--covariate` is `covariates`).
+            let key = arg.get_id().as_str();
+            // At the top, or in a flattened group's object (`qc`, `covariate`).
+            let kept = flags.get(key).or_else(|| {
+                flags
+                    .as_object()
+                    .unwrap()
+                    .values()
+                    .find_map(|group| group.as_object()?.get(key))
+            });
             assert_eq!(kept.is_some(), !not.contains(&long), "--{long}");
             if let Some(v) = kept {
                 let raw = m

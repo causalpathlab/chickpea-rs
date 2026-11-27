@@ -51,6 +51,16 @@ pub fn names(prefix: &str, n: usize) -> Vec<Box<str>> {
 
 /// Writes `{dir}/rna.zarr` and `{dir}/atac.zarr` for the same barcodes.
 pub fn write_fixture(dir: &std::path::Path) -> (String, String) {
+    write_fixture_with(dir, &[], |_| 0.0)
+}
+
+/// [`write_fixture`] with `extra` genes after the planted ones, each
+/// counting `extra_count(cell)` in every cell (no peaks, no position).
+pub fn write_fixture_with(
+    dir: &std::path::Path,
+    extra: &[&str],
+    extra_count: impl Fn(usize) -> f32,
+) -> (String, String) {
     let mut rng = StdRng::seed_from_u64(7);
     let mut count = |on: bool| -> f32 {
         let mean = if on { 8.0 } else { 0.3 };
@@ -66,6 +76,12 @@ pub fn write_fixture(dir: &std::path::Path) -> (String, String) {
             let v = count(program_of(g) == program_of(c));
             if v > 0.0 {
                 rna.push((g as u64, c as u64, v));
+            }
+        }
+        for e in 0..extra.len() {
+            let v = extra_count(c);
+            if v > 0.0 {
+                rna.push(((N_GENES + e) as u64, c as u64, v));
             }
         }
     }
@@ -99,8 +115,10 @@ pub fn write_fixture(dir: &std::path::Path) -> (String, String) {
         m.register_column_names_vec(&barcodes);
         path
     };
+    let mut rna_names = gene_names();
+    rna_names.extend(extra.iter().map(|&e| e.into()));
     (
-        write("rna.zarr", &rna, &gene_names()),
+        write("rna.zarr", &rna, &rna_names),
         write("atac.zarr", &atac, &peak_names),
     )
 }

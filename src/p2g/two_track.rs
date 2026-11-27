@@ -56,6 +56,9 @@ pub struct TwoTrackConfig {
     pub seed: u64,
     pub device: crate::common::ComputeDevice,
     pub device_no: usize,
+    /// Per-cell covariates binned as a second axis of batch
+    /// ([`super::covariate`]); none here, `all` from the CLI.
+    pub covariate: genomic_data::covariate::CovariateArgs,
 }
 
 impl Default for TwoTrackConfig {
@@ -76,6 +79,7 @@ impl Default for TwoTrackConfig {
             seed: 42,
             device: crate::common::ComputeDevice::Cpu,
             device_no: 0,
+            covariate: genomic_data::covariate::CovariateArgs::default(),
         }
     }
 }
@@ -207,6 +211,10 @@ pub fn embed_two_track(
         unified.count_backend_mut().mask_rows(&on)?;
         unified.feature_to_backend_row = (0..keep.len()).collect();
     }
+
+    // Covariate bins join the batches before the pseudobulks read them.
+    let covariates =
+        super::covariate::relabel_batches(&mut unified, &cfg.covariate, cfg.proj_dim, cfg.seed)?;
 
     let feature_names = unified.feature_names.clone();
     let mut rna_feat: FxHashMap<Box<str>, u32> = FxHashMap::default();
@@ -372,6 +380,15 @@ pub fn embed_two_track(
         peak_row_idx.push(r);
         module_of_peak.push(out.module_labels[r]);
     }
+
+    super::covariate::write(
+        input.work_prefix,
+        covariates.as_ref(),
+        &unified.barcodes,
+        out.batch_gene_fold.as_ref(),
+        &gene_names,
+        &rna_row_idx,
+    )?;
 
     let rna_rows = feat.select_rows(rna_row_idx.iter());
     let peak_rows = feat.select_rows(peak_row_idx.iter());
