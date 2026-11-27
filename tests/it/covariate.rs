@@ -81,9 +81,15 @@ fn a_planted_mito_share_takes_bins_of_its_own() {
         .filter(|(l, _)| l.contains("|cv"))
         .map(|(_, &n)| n)
         .collect();
-    // Two bins of about half each; the guards may leave a few cells plain.
+    // Two bins of about half each (60 planted high, 60 low); the like-cell
+    // guard may leave a few cells plain, how many varying by machine.
+    let plain = N_CELLS - sizes.iter().sum::<usize>();
     assert!(
-        sizes.len() == 2 && sizes.iter().all(|&n| n * 100 >= 45 * N_CELLS),
+        sizes.len() == 2
+            && sizes
+                .iter()
+                .all(|&n| (40 * N_CELLS..=55 * N_CELLS).contains(&(n * 100)))
+            && plain * 10 <= N_CELLS,
         "levels {:?}",
         model.levels
     );
