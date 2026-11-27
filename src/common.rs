@@ -45,7 +45,7 @@ impl ComputeDevice {
     }
 }
 
-pub use legume_numeric::matrix::common_io::{mkdir_parent, remove_file};
+pub use legume_numeric::matrix::common_io::mkdir_parent;
 pub use legume_numeric::matrix::traits::*;
 pub use legume_numeric::param::traits::TwoStatParam;
 

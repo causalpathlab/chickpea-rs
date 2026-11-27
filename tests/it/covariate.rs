@@ -17,9 +17,18 @@ fn high_mito(c: usize) -> bool {
     (c / 3) % 2 == 1
 }
 
+/// [`try_embed`], unwrapped.
+fn embed(dir: &std::path::Path, epochs: usize, covariate: CovariateArgs) -> (String, usize) {
+    try_embed(dir, epochs, covariate).unwrap()
+}
+
 /// The fixture with [`MITO`] planted, embedded with `covariate`; the run's
 /// output prefix and its cell rows.
-fn embed(dir: &std::path::Path, epochs: usize, covariate: CovariateArgs) -> (String, usize) {
+fn try_embed(
+    dir: &std::path::Path,
+    epochs: usize,
+    covariate: CovariateArgs,
+) -> anyhow::Result<(String, usize)> {
     let (rna, atac) = write_fixture_with(dir, &MITO, |c| if high_mito(c) { 20.0 } else { 1.0 });
     let mut genes = gene_positions();
     genes.extend(MITO.iter().map(|_| None));
@@ -46,8 +55,8 @@ fn embed(dir: &std::path::Path, epochs: usize, covariate: CovariateArgs) -> (Str
         kernel: &kernel(),
         work_prefix: &work,
     };
-    let out = embed_two_track(&input, &cfg).unwrap();
-    (work, out.cell_rows.nrows())
+    let out = embed_two_track(&input, &cfg)?;
+    Ok((work, out.cell_rows.nrows()))
 }
 
 #[test]
@@ -102,4 +111,15 @@ fn none_models_nothing_and_writes_nothing() {
     let dir = tempfile::tempdir().unwrap();
     let (work, _) = embed(dir.path(), 5, CovariateArgs::default());
     assert!(!std::path::Path::new(&files::model(&work)).exists());
+}
+
+#[test]
+fn a_named_covariate_without_its_genes_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let stress = CovariateArgs {
+        covariates: vec!["stress".into()],
+        ..CovariateArgs::default()
+    };
+    let err = try_embed(dir.path(), 5, stress).unwrap_err().to_string();
+    assert!(err.contains("stress"), "{err}");
 }
