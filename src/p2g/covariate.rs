@@ -11,7 +11,9 @@ use super::two_track::RNA_TAG;
 use crate::common::*;
 use data_beans::alg::random_projection::RandProjOps;
 use data_beans::bipartite_graph_embedding_input::BipartiteEmbeddingCells;
-use genomic_data::covariate::{files, model_covariates, ColumnBlocks, CovariateArgs, Modelled};
+use genomic_data::covariate::{
+    files, plain_batch, score_covariates, ColumnBlocks, CovariateArgs, Modelled,
+};
 use nalgebra_sparse::CscMatrix;
 use rustc_hash::FxHashMap;
 use std::path::{Path, PathBuf};
@@ -34,7 +36,8 @@ impl ColumnBlocks for Blocks<'_> {
     }
 }
 
-/// Every covariate file a run at `out` may write, whether or not it bins.
+/// Every covariate file a run at `out` may write, whether or not it bins
+/// (the names the MCP prefix guard checks).
 #[must_use]
 pub fn outputs_of(out: &str) -> [PathBuf; 3] {
     [files::model(out), files::cells(out), files::effect(out)].map(Into::into)
@@ -53,7 +56,8 @@ pub fn rna_rows(names: &[Box<str>]) -> Vec<usize> {
 
 /// Model `args`' covariates on `unified`'s cells and give each its
 /// `batch|cvK` label in place of its batch (the condition axis too, when it
-/// copied the batch axis). The projection the like-cell guard reads is
+/// copied the batch axis). The cells are scored first; only when some
+/// covariate scores is the projection the like-cell guard reads made,
 /// seeded by `seed`. Returns the model, to be written by [`write`] once the
 /// fit has succeeded; `None`, the batches as they were, when no cell is
 /// binned (the reason logged).
@@ -70,6 +74,16 @@ pub fn relabel_batches(
     if !args.is_on()? {
         return Ok(None);
     }
+    // Labels with parts of their own are checked first, before any counts
+    // are read (each distinct label once).
+    if let Err(e) = unified
+        .batch_names
+        .iter()
+        .try_for_each(|b| plain_batch(b).map(drop))
+    {
+        args.unsupported(&e.to_string())?;
+        return Ok(None);
+    }
     let plain = unified.batch_labels();
     let data = unified.count_backend();
     let rna = rna_rows(&data.row_names()?);
@@ -77,18 +91,20 @@ pub fn relabel_batches(
         args.unsupported("no RNA rows to score")?;
         return Ok(None);
     }
-    let proj_kn = data
-        .project_columns_with_batch_correction_seeded(proj_dim, Some(BLOCK), Some(&plain), seed)?
-        .proj;
     // Scored on a view of the RNA rows alone, so no block carries the peaks.
     let mut genes = data.clone_for_collapse();
     let mut keep = vec![false; data.num_rows()];
     rna.iter().for_each(|&r| keep[r] = true);
     genes.mask_rows(&keep)?;
-    let every: Vec<usize> = (0..rna.len()).collect();
-    let Some(modelled) =
-        model_covariates(&Blocks(&genes), &plain, &proj_kn, args, Some(&every), BLOCK)?
-    else {
+    let Some(scored) = score_covariates(&Blocks(&genes), args, None, BLOCK)? else {
+        return Ok(None);
+    };
+    drop(genes);
+    // Over every row, peaks too: the like-cell groups are the cells' states.
+    let proj_kn = data
+        .project_columns_with_batch_correction_seeded(proj_dim, Some(BLOCK), Some(&plain), seed)?
+        .proj;
+    let Some(modelled) = scored.bin(&plain, &proj_kn)? else {
         return Ok(None);
     };
 
@@ -137,8 +153,8 @@ pub fn write(
     genes: &[Box<str>],
     rows: &[usize],
 ) -> anyhow::Result<()> {
-    for old in outputs_of(out) {
-        remove_file(&old.to_string_lossy())?;
+    for old in files::clear_stale(out)? {
+        info!("--covariate: removed an earlier run's {old}");
     }
     let Some(m) = modelled else {
         return Ok(());
