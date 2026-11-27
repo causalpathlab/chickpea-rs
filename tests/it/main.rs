@@ -5,6 +5,7 @@ mod cis_pairs;
 mod cli;
 mod common;
 mod context_links;
+mod covariate;
 mod embed_two_track;
 mod mcp;
 #[cfg(feature = "tui")]

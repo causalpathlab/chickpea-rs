@@ -7,6 +7,7 @@
 
 pub mod cis;
 pub mod context;
+pub mod covariate;
 pub mod groups;
 pub mod input;
 pub mod record;

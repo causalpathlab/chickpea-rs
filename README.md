@@ -66,6 +66,16 @@ variance and the correlation run across pseudobulk units.
 Cell QC (on by default, driven by the RNA counts) leaves failed cells in the
 embedding but out of clustering, accessibility rates and every cell table.
 
+Covariates (on by default, `--covariate all`) are modelled as a second axis
+of batch, the same way and with the same flags as senna and pinto. Each
+cell's cell cycle, mito and ribo shares, sex, dissociation stress, hypoxia
+and interferon programmes are scored on its RNA rows alone (its peaks
+neither dilute a share nor join the control pool). The covariates with
+groups of their own are binned together, and each cell's batch becomes
+`batch|cvK`, so the fit's per-gene batch fold absorbs them too. Every
+loaded cell is binned, QC-failed ones too, since they are in the fit.
+`--covariate none` keeps the batches as given.
+
 ## Usage
 
 ```bash
@@ -86,6 +96,9 @@ Key options (see `chickpea peak-to-gene --help` for all):
 | `--rna`, `--atac` | — | paired matrices (zarr/h5) for the same barcodes, one file each per sample (paired by position); with several samples a cell is `{barcode}@{sample}` and each sample is a batch |
 | `--data` | — | the count files in any order, in place of `--rna`/`--atac`: each told RNA, ATAC or both (genes and peaks as rows of one file, a 10x multiome matrix) by its rows, and RNA and ATAC files paired by the words of their names |
 | `--batch` | — | batch labels, one per barcode |
+| `--covariate` | all | per-cell covariates binned as a second axis of batch: `all`, `none`, or a list (`cycle`, `mito`, `ribo`, `sex`, `stress`, `hypoxia`, `interferon`) |
+| `--covariate-genes` | — | gene sets of your own (`covariate`, `set`, `kind`, `symbol`), adding or replacing covariates |
+| `--covariate-criterion`, `--covariate-bins-max` | icl, 10 | what chooses the number of bins, and the most it may choose (`--covariate-bins` fixes it) |
 | `--cis-window` | 500000 | max peak-midpoint distance (bp) to a TSS |
 | `--max-cis` | 200 | cap on candidate peaks per gene (nearest) |
 | `--contact-gamma`, `--contact-pseudocount` | 1, 5000 | ABC contact `(d + c)^-γ` |
@@ -113,6 +126,7 @@ Outputs, all `{out}.*.parquet`, and the run's record `{out}.run.json`:
 | `gene_embedding` | RNA gene rows |
 | `peak_embedding`, `peaks` | each peak's module row; `peak`, `chromosome`, `start`, `end` |
 | `cell_embedding`, `cell_clusters` | per-cell rows; `cell`, `cluster`, `group` |
+| `covariates`, `covariate_effect` | when cells are binned: each cell's covariate scores and `batch_label`; each RNA gene's fold per bin, centred over the bins. The fitted model is `{out}.covariate_model.json` |
 
 ### Regroup, run and view
 
