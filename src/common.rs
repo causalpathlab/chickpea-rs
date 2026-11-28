@@ -1,15 +1,6 @@
 pub use log::info;
 pub use std::sync::Arc;
 
-pub const DEFAULT_KNN: usize = 10;
-pub const DEFAULT_OPT_ITER: usize = 100;
-
-pub type Mat = nalgebra::DMatrix<f32>;
-pub type DVec = nalgebra::DVector<f32>;
-pub type CscMat = nalgebra_sparse::CscMatrix<f32>;
-
-pub type SparseData = dyn SparseIo<IndexIter = Vec<usize>>;
-
 pub use data_beans::sparse_io::*;
 pub use data_beans::sparse_io_stack::*;
 pub use data_beans::sparse_io_vector::*;
@@ -47,13 +38,7 @@ impl ComputeDevice {
 
 pub use legume_numeric::matrix::common_io::mkdir_parent;
 pub use legume_numeric::matrix::traits::*;
-pub use legume_numeric::param::traits::TwoStatParam;
 
-pub use data_beans::alg::collapse_data::MultilevelCollapsingOps;
-pub use data_beans::alg::feature_coarsening::*;
 pub use data_beans::alg::random_projection::*;
 
-pub use legume_numeric::param::io::ParamIo;
-pub use legume_numeric::param::traits::Inference;
-
-pub use legume_numeric::candle::{candle_core, candle_nn};
+pub use legume_numeric::candle::candle_core;
