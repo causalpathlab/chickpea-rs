@@ -6,8 +6,10 @@
 Peak-to-gene cis-regulatory linkage from paired single-cell RNA + ATAC.
 
 RNA genes and ATAC peaks share one multiome feature axis, embedded like
-`senna bge --multiome`: a wide ATAC modality is module-only, so each peak's row
-is its module's row. Inside the phase-1 fit, each gene's score mixes in the
+`senna bge --multiome`: a modality of at least `--module-only-min-rows` rows
+(wide ATAC, as a rule) is module-only, so each peak's row is its module's row;
+a narrower ATAC keeps a row per peak, and RNA that wide goes module-only too.
+Inside the phase-1 fit, each gene's score mixes in the
 predicted accessibility of its cis peaks, pooled through ReLU gates on
 distance, and an alignment term pulls the gene's own profile toward it, so
 genes and peaks share one feature space.
@@ -86,8 +88,10 @@ chickpea peak-to-gene \
   -o out
 ```
 
-Gene TSS positions come from `--gene-coords` (a `gene<TAB>chr<TAB>tss` TSV with
-a header) or `--gff-file` (GFF/GTF); one is required.
+Gene TSS positions come from `--gene-coords` (a table with a header naming its
+`gene`, `chr` (or `chromosome`) and `tss` columns: TSV, CSV or parquet, as the
+simulator writes it) or `--gff-file` (GFF/GTF); one is required, and at least
+one RNA gene must get a position.
 
 Key options (see `chickpea peak-to-gene --help` for all):
 
@@ -108,8 +112,8 @@ Key options (see `chickpea peak-to-gene --help` for all):
 | `--embedding-dim` | 128 | embedding dimension |
 | `--epochs` | 1000 | embedding epochs |
 | `--feature-modules` | 1024 | RNA gene modules |
-| `--peak-modules` | 10000 | ATAC peak modules (each peak's row is its module's) |
-| `--module-only-min-rows` | 100000 | ATAC goes module-only at this many peaks (0 = off) |
+| `--peak-modules` | 10000 | ATAC peak modules when ATAC is module-only (each peak's row is its module's); unused below `--module-only-min-rows` peaks |
+| `--module-only-min-rows` | 100000 | a modality goes module-only at this many rows: ATAC at this many peaks, RNA too at this many genes (0 = off) |
 | `--device`, `--device-no` | cpu, 0 | compute device (`cpu`, `cuda`, `metal`) |
 | `--n-clusters` | Leiden | target number of cell clusters |
 | `--groups` | Leiden | cell groups for the per-group tables: a lupin round (`.json`), its argmax table, or a cell, group table |
@@ -124,7 +128,7 @@ Outputs, all `{out}.*.parquet`, and the run's record `{out}.run.json`:
 | `groups`, `peak_rates` | each group's `cluster` number, name and cells; each peak's accessibility in all cells and in each group |
 | `genes` | `gene`, `chromosome`, `tss` |
 | `gene_embedding` | RNA gene rows |
-| `peak_embedding`, `peaks` | each peak's module row; `peak`, `chromosome`, `start`, `end` |
+| `peak_embedding`, `peaks` | each peak's row (its module's when ATAC is module-only); `peak`, `chromosome`, `start`, `end` |
 | `cell_embedding`, `cell_clusters` | per-cell rows; `cell`, `cluster`, `group` |
 | `covariates`, `covariate_effect` | when cells are binned: each cell's covariate scores and `batch_label`; each RNA gene's fold per bin, centred over the bins. The fitted model is `{out}.covariate_model.json` |
 

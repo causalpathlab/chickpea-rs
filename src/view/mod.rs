@@ -47,11 +47,12 @@ pub struct ViewArgs {
     #[arg(long, default_value = "score", value_parser = ["score", "gate", "corr", "abc"])]
     pub measure: String,
 
-    /// bp each side of the TSS the locus shows [default: its farthest link]
+    /// bp each side of the TSS the locus shows, at least 1 kb [default: its
+    /// farthest link and a tenth more, at least 20 kb]
     #[arg(long)]
     pub half_window: Option<i64>,
 
-    /// Links weaker than this share of the strongest shown are left out
+    /// Links weaker than this share of their row's strongest are left out
     #[arg(long, default_value_t = 0.05)]
     pub cutoff: f32,
 

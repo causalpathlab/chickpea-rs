@@ -53,6 +53,7 @@ fn candidates_are_the_peaks_inside_each_genes_window() {
     let (genes, peaks) = fixture();
     let pairs = build_cis_pairs(&genes, &peaks, &kernel());
     assert_eq!(pairs.n_genes(), 4);
+    // Peak 1, between GENE1 and GENE2, is a candidate for both.
     assert_eq!(peaks_of(&pairs, 0), vec![0, 1]);
     assert_eq!(peaks_of(&pairs, 1), vec![1]);
     assert!(
@@ -66,14 +67,6 @@ fn candidates_are_the_peaks_inside_each_genes_window() {
     );
     assert_eq!(pairs.n_pairs(), 4);
     assert_eq!(pairs.n_genes_placed, 3);
-}
-
-#[test]
-fn a_peak_near_two_genes_is_a_candidate_for_both() {
-    let (genes, peaks) = fixture();
-    let pairs = build_cis_pairs(&genes, &peaks, &kernel());
-    assert!(peaks_of(&pairs, 0).contains(&1));
-    assert!(peaks_of(&pairs, 1).contains(&1));
 }
 
 #[test]
@@ -113,12 +106,20 @@ fn peaks_that_reach_no_gene_are_counted() {
     );
 }
 
+/// The default `max_per_gene` is far above the fixture's candidates, so it
+/// keeps every in-window peak: the pairs are those of no cap at all.
 #[test]
-fn the_distance_window_keeps_every_in_window_peak() {
-    // Cap lives in phase-1 (initial ⟨μ,ρ⟩), not in the distance scan.
+fn the_default_cap_keeps_every_in_window_peak() {
     let (genes, peaks) = fixture();
-    let pairs = build_cis_pairs(&genes, &peaks, &kernel());
-    assert_eq!(peaks_of(&pairs, 0), vec![0, 1]);
+    let capped = build_cis_pairs(&genes, &peaks, &kernel());
+    let uncapped = AbcKernel {
+        max_per_gene: usize::MAX,
+        ..kernel()
+    };
+    let all = build_cis_pairs(&genes, &peaks, &uncapped);
+    assert_eq!(capped.gene_ptr, all.gene_ptr);
+    assert_eq!(capped.peak, all.peak);
+    assert_eq!(capped.weight, all.weight);
 }
 
 /// At most `max_per_gene` candidates per gene, nearest first, in ascending

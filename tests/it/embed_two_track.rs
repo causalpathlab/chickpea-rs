@@ -2,9 +2,10 @@
 //! axis (module-only ATAC). Cell programs separate.
 
 use crate::common::{
-    gene_positions, index, kernel, program_of, write_fixture, N_CELLS, N_GENES, PEAKS_PER_GENE,
+    gene_positions, index, program_of, small_config, write_fixture, Fixture, N_CELLS, N_GENES,
+    PEAKS_PER_GENE,
 };
-use chickpea::p2g::two_track::{embed_two_track, TwoTrackConfig, TwoTrackInput};
+use chickpea::p2g::two_track::embed_two_track;
 use nalgebra::DMatrix;
 
 fn cosine(a: &[f32], b: &[f32]) -> f32 {
@@ -20,32 +21,8 @@ fn row(m: &DMatrix<f32>, r: usize) -> Vec<f32> {
 #[test]
 fn programs_separate_on_the_multiome_axis() {
     let dir = tempfile::tempdir().unwrap();
-    let (rna, atac) = write_fixture(dir.path());
-    let genes = gene_positions();
-    let work = dir.path().join("run").to_string_lossy().into_owned();
-    let cfg = TwoTrackConfig {
-        embedding_dim: 8,
-        epochs: 60,
-        num_levels: 2,
-        sort_dim: 3,
-        proj_dim: 8,
-        feature_modules: 4,
-        peak_modules: 4,
-        phase1_cells_per_pb: 4,
-        // 24 genes < 30 ≤ 48 peaks → ATAC module-only, RNA keeps residuals.
-        module_only_min_rows: 30,
-        ..TwoTrackConfig::default()
-    };
-    let samples =
-        chickpea::p2g::samples::pair(&[rna.as_str().into()], &[atac.as_str().into()]).unwrap();
-    let input = TwoTrackInput {
-        samples: &samples,
-        batch_file: None,
-        gene_positions: &genes,
-        kernel: &kernel(),
-        work_prefix: &work,
-    };
-    let out = embed_two_track(&input, &cfg).unwrap();
+    let fixture = Fixture::new(dir.path(), write_fixture(dir.path()), gene_positions());
+    let out = embed_two_track(&fixture.input(), &small_config()).unwrap();
 
     assert_eq!(out.genes.len(), N_GENES);
     assert_eq!(out.rna_rows.nrows(), N_GENES);

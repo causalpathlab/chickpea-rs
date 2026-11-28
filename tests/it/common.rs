@@ -2,21 +2,87 @@
 //! peaks each, written as tiny RNA and ATAC zarrs.
 
 use chickpea::p2g::cis::AbcKernel;
+use chickpea::p2g::samples::Sample;
+use chickpea::p2g::two_track::{TwoTrackConfig, TwoTrackInput};
 use data_beans::sparse_io::{create_sparse_from_triplets, SparseIoBackend};
 use genomic_data::coordinates::GeneTss;
 use rand::rngs::StdRng;
 use rand::{RngExt, SeedableRng};
 
-/// Flags that keep a run on the fixture small, as `(flag, value)`.
-pub const SMALL: [(&str, &str); 7] = [
+/// Flags that keep a run on the fixture small, as `(flag, value)`: the
+/// command line's [`small_config`].
+pub const SMALL: [(&str, &str); 9] = [
     ("embedding-dim", "8"),
     ("epochs", "60"),
     ("num-levels", "2"),
     ("sort-dim", "3"),
     ("proj-dim", "8"),
     ("feature-modules", "4"),
+    ("peak-modules", "4"),
+    ("phase1-cells-per-pb", "4"),
     ("module-only-min-rows", "30"),
 ];
+
+/// An embedding small enough for the fixture, as [`SMALL`] spells it.
+pub fn small_config() -> TwoTrackConfig {
+    TwoTrackConfig {
+        embedding_dim: 8,
+        epochs: 60,
+        num_levels: 2,
+        sort_dim: 3,
+        proj_dim: 8,
+        feature_modules: 4,
+        peak_modules: 4,
+        phase1_cells_per_pb: 4,
+        // 24 genes < 30 ≤ 48 peaks → ATAC module-only, RNA keeps residuals.
+        module_only_min_rows: 30,
+        ..TwoTrackConfig::default()
+    }
+}
+
+/// What a [`TwoTrackInput`] on the fixture borrows: one sample, the genes'
+/// positions, [`kernel`], and the output prefix `{dir}/run`.
+pub struct Fixture {
+    samples: Vec<Sample>,
+    /// The RNA and ATAC rows, as the samples have them.
+    rows: [Vec<Box<str>>; 2],
+    genes: Vec<Option<GeneTss>>,
+    kernel: AbcKernel,
+    pub work: String,
+}
+
+impl Fixture {
+    /// The sample `(rna, atac)`, as [`write_fixture`] returns it, with genes
+    /// at `genes`.
+    pub fn new(
+        dir: &std::path::Path,
+        (rna, atac): (String, String),
+        genes: Vec<Option<GeneTss>>,
+    ) -> Self {
+        use chickpea::p2g::samples::{pair, same_rows, Side};
+        let samples = pair(&[rna.into()], &[atac.into()]).unwrap();
+        let rows = [Side::Rna, Side::Atac].map(|side| same_rows(&samples, side).unwrap());
+        Self {
+            samples,
+            rows,
+            genes,
+            kernel: kernel(),
+            work: dir.join("run").to_string_lossy().into_owned(),
+        }
+    }
+
+    pub fn input(&self) -> TwoTrackInput<'_> {
+        TwoTrackInput {
+            samples: &self.samples,
+            genes: &self.rows[0],
+            peaks: &self.rows[1],
+            batch_file: None,
+            gene_positions: &self.genes,
+            kernel: &self.kernel,
+            work_prefix: &self.work,
+        }
+    }
+}
 
 /// The chickpea binary these tests are built with.
 pub fn chickpea() -> std::process::Command {
@@ -29,6 +95,33 @@ pub fn small() -> Vec<String> {
         .iter()
         .flat_map(|(flag, value)| [format!("--{flag}"), value.to_string()])
         .collect()
+}
+
+/// Fails the test with the child's stderr unless it succeeded.
+pub fn assert_ok(st: &std::process::Output) {
+    assert!(
+        st.status.success(),
+        "{}",
+        String::from_utf8_lossy(&st.stderr)
+    );
+}
+
+/// `chickpea peak-to-gene` on the fixture written to `dir`, with [`SMALL`],
+/// a window that reaches each gene's own peaks only, then `extra`; the out
+/// prefix.
+pub fn run_p2g(dir: &std::path::Path, extra: &[&str]) -> String {
+    let (rna, atac) = write_fixture(dir);
+    let genes = write_gene_coords(dir);
+    let out = dir.join("run").to_string_lossy().into_owned();
+    let st = chickpea()
+        .args(["peak-to-gene", "--rna", &rna, "--atac", &atac])
+        .args(["--gene-coords", &genes, "--cis-window", "10000", "-o", &out])
+        .args(small())
+        .args(extra)
+        .output()
+        .unwrap();
+    assert_ok(&st);
+    out
 }
 
 pub const N_GENES: usize = 24;

@@ -209,7 +209,14 @@ fn form(f: &mut Frame, app: &App, area: Rect, look: &Look, drawn: &mut Drawn) {
                 (Some(text), true) => format!("{text}▏"),
                 _ => field.shown(),
             };
-            let style = if at { look.selected } else { look.page };
+            // An advanced row (a flag --help hides) is dim.
+            let style = if at {
+                look.selected
+            } else if field.advanced {
+                look.hint
+            } else {
+                look.page
+            };
             let blame = (blamed == Some(field.long.as_str())).then_some("← here");
             row_line(field, at, width, look, style, shown, blame)
         })
@@ -225,7 +232,7 @@ fn form(f: &mut Frame, app: &App, area: Rect, look: &Look, drawn: &mut Drawn) {
     let how = match field.kind {
         Kind::Flag { .. } => "enter toggles",
         Kind::Choice(_) => "←/→ or enter changes",
-        Kind::Text if field.takes_path() => {
+        Kind::Text if super::app::browses(field) => {
             "enter browses for the file, e types it (empty: default)"
         }
         Kind::Text => "enter types a value (empty: default)",
@@ -312,9 +319,16 @@ fn command(f: &mut Frame, app: &App, area: Rect, look: &Look) {
         }
         _ => {}
     }
-    let block = Block::default()
+    let mut block = Block::default()
         .borders(Borders::TOP)
         .border_style(look.border);
+    // A line given after `--` runs word for word until it is edited.
+    if app.as_given().is_some() {
+        block = block.title(Span::styled(
+            " the line given runs as given until something is changed ",
+            look.hint,
+        ));
+    }
     f.render_widget(
         Paragraph::new(text)
             .wrap(Wrap { trim: false })

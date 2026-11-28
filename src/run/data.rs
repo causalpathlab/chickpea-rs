@@ -155,12 +155,35 @@ impl Data {
     /// of both is a row by itself), gaps in the rows filled first, then the
     /// rest paired by the words of their names. Says what it did.
     pub fn add(&mut self, files: Vec<PathBuf>) -> String {
+        self.add_read(told(files))
+    }
+
+    /// [`Data::add_told`] for files read off the screen ([`Told`]): those
+    /// told apart taken, and why each other could not be read said after
+    /// what was done.
+    pub fn add_read(&mut self, files: Told) -> String {
+        let mut why: Vec<String> = Vec::new();
+        let told = files
+            .into_iter()
+            .filter_map(|(f, h)| h.map_err(|e| why.push(e)).ok().map(|h| (f, h)))
+            .collect();
+        std::iter::once(self.add_told(told))
+            .chain(why)
+            .collect::<Vec<_>>()
+            .join("; ")
+    }
+
+    /// [`Data::add`] for files already told apart ([`told`]).
+    pub fn add_told(&mut self, files: Vec<(PathBuf, Holds)>) -> String {
         let have: Vec<&PathBuf> = self.pairs.iter().flat_map(Pair::files).collect();
-        let files: Vec<PathBuf> = files.into_iter().filter(|f| !have.contains(&f)).collect();
+        let files: Vec<(PathBuf, Holds)> = files
+            .into_iter()
+            .filter(|(f, _)| !have.contains(&f))
+            .collect();
         let mut pools: [Vec<PathBuf>; 2] = [Vec::new(), Vec::new()];
         let mut both = 0;
-        for f in files {
-            match holds(&f) {
+        for (f, holds) in files {
+            match holds {
                 Holds::Rna => pools[0].push(f),
                 Holds::Atac => pools[1].push(f),
                 Holds::Both => {
@@ -202,6 +225,48 @@ impl Data {
 /// Paths as names, to pair by.
 fn names(paths: &[PathBuf]) -> Vec<std::borrow::Cow<'_, str>> {
     paths.iter().map(|p| p.to_string_lossy()).collect()
+}
+
+/// Files read off the screen: each with what it holds, or why it could
+/// not be told.
+pub type Told = Vec<(PathBuf, Result<Holds, String>)>;
+
+/// Each of `files` with what it holds ([`holds`]): slow for a file whose
+/// name does not say, which is opened.
+#[must_use]
+pub fn told(files: Vec<PathBuf>) -> Told {
+    files
+        .into_iter()
+        .map(|f| {
+            let h = holds(&f);
+            (f, Ok(h))
+        })
+        .collect()
+}
+
+/// Each of `files` with what it holds as the run tells `--data` apart: by
+/// its rows, so the rows they make pair as the run's samples would. A file
+/// that cannot be read is not guessed at: why is its answer, as the run
+/// would refuse it. Slow: every file is opened.
+#[must_use]
+pub fn told_as_run(files: Vec<PathBuf>) -> Told {
+    files
+        .into_iter()
+        .map(|f| {
+            let p = f.to_string_lossy();
+            let h = samples::holds(&p).map_err(|e| format!("{p}: {e:#}"));
+            (f, h)
+        })
+        .collect()
+}
+
+/// Whether the names of all `files` say what they hold, so telling them
+/// apart opens none.
+#[must_use]
+pub fn told_by_name(files: &[PathBuf]) -> bool {
+    files
+        .iter()
+        .all(|f| samples::holds_by_name(&f.to_string_lossy()).is_some())
 }
 
 /// What a file holds: by its name when that says, else by its rows (a

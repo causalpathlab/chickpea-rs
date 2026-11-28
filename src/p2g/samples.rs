@@ -40,6 +40,15 @@ impl Sample {
         self.rna == self.atac
     }
 
+    /// The file that holds its `side`.
+    #[must_use]
+    pub fn file(&self, side: Side) -> &str {
+        match side {
+            Side::Rna => &self.rna,
+            Side::Atac => &self.atac,
+        }
+    }
+
     /// `barcode` as the run names it.
     #[must_use]
     pub fn cell<'a>(&self, barcode: &'a str) -> Cow<'a, str> {
@@ -163,11 +172,7 @@ pub fn peak_rows(names: &[Box<str>]) -> Vec<bool> {
 /// The rows of `sample`'s `side`: all its file's rows, or for a mixed file
 /// the genes (rows that are not peaks) or the peaks.
 pub fn rows(sample: &Sample, side: Side) -> anyhow::Result<Vec<Box<str>>> {
-    let file = match side {
-        Side::Rna => &sample.rna,
-        Side::Atac => &sample.atac,
-    };
-    let names = open_sparse_matrix_by_path(file)?.row_names()?;
+    let names = open_sparse_matrix_by_path(sample.file(side))?.row_names()?;
     if !sample.mixed() {
         return Ok(names);
     }
@@ -188,18 +193,16 @@ pub fn same_rows(samples: &[Sample], side: Side) -> anyhow::Result<Vec<Box<str>>
         Side::Atac => "peaks",
     };
     let first = rows(&samples[0], side)?;
-    anyhow::ensure!(!first.is_empty(), "{} has no {what}", samples[0].rna);
+    let first_file = samples[0].file(side);
+    anyhow::ensure!(!first.is_empty(), "{first_file} has no {what}");
     for s in &samples[1..] {
         let mine = rows(s, side)?;
         anyhow::ensure!(
             mine == first,
             "{} has other {what} than {} ({} and {}): give every sample the same {what}, in \
              the same order (data-beans subset or merge can make them so)",
-            match side {
-                Side::Rna => &s.rna,
-                Side::Atac => &s.atac,
-            },
-            samples[0].rna,
+            s.file(side),
+            first_file,
             mine.len(),
             first.len()
         );
@@ -257,9 +260,8 @@ fn sample_words(path: &str) -> Vec<String> {
         .into_iter()
         .map(|w| w.to_lowercase())
         .filter(|w| {
-            ![RNA_WORDS, ATAC_WORDS, BOTH_WORDS]
-                .concat()
-                .contains(&w.as_str())
+            let w = w.as_str();
+            !(RNA_WORDS.contains(&w) || ATAC_WORDS.contains(&w) || BOTH_WORDS.contains(&w))
         })
         .collect()
 }
@@ -326,6 +328,7 @@ pub fn infer(files: &[Box<str>]) -> anyhow::Result<Vec<Sample>> {
             Holds::Both => both.push(f.clone()),
         }
     }
+    let n_both = both.len();
     let mut pairs: Vec<(Box<str>, Box<str>)> = both.into_iter().map(|f| (f.clone(), f)).collect();
     for (r, a) in pair_by_name(&rna, &atac) {
         match (r.map(|i| rna[i].clone()), a.map(|j| atac[j].clone())) {
@@ -337,7 +340,7 @@ pub fn infer(files: &[Box<str>]) -> anyhow::Result<Vec<Sample>> {
                 "{f} has no partner: {} RNA and {} ATAC files (and {} of both) among --data",
                 rna.len(),
                 atac.len(),
-                pairs.len()
+                n_both
             ),
             (None, None) => {}
         }

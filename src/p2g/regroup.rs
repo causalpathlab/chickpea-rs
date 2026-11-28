@@ -97,9 +97,7 @@ pub fn run_regroup(args: &RegroupArgs) -> anyhow::Result<()> {
         from != *args.out,
         "--out is the run itself: give the regrouped run an out of its own"
     );
-    if let Some(there) = args.outputs().iter().find(|p| p.exists()) {
-        anyhow::bail!("{} exists: a run is not written over", there.display());
-    }
+    crate::p2g::steps::not_over(&args.outputs(), "give another --out")?;
     let groups = Groups::read(&args.groups)?;
     mkdir_parent(&args.out)?;
 
@@ -236,6 +234,7 @@ fn read_pairs(
         peak: Vec::with_capacity(rows.len()),
         dist: Vec::with_capacity(rows.len()),
         weight: Vec::with_capacity(rows.len()),
+        // The build's counts: regroup reads none of them.
         n_genes_placed: 0,
         n_unparsed_peaks: 0,
         n_unreached_peaks: 0,
@@ -247,9 +246,6 @@ fn read_pairs(
         pairs.weight.push(abc[i] as f32);
         gates.push(gate[i] as f32);
     }
-    pairs.n_genes_placed = (0..genes.len())
-        .filter(|&g| !pairs.gene(g).is_empty())
-        .count();
     Ok((pairs, gates))
 }
 

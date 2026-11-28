@@ -9,7 +9,9 @@
 //!   passed QC;
 //! - `groups`: `cluster`, `group`, `cells`: the groups, chickpea's own Leiden
 //!   clusters (`C0`, `C1`, …) or those given with `--groups`;
-//! - `peak_embedding`: each peak's ATAC-module row `μ_{m(p)}`;
+//! - `peak_embedding`: each peak's row: its ATAC module's `μ_{m(p)}` when
+//!   ATAC is module-only (at least `--module-only-min-rows` peaks), else its
+//!   own;
 //! - `peaks`: `peak`, `chromosome`, `start`, `end`;
 //! - `genes`: `gene`, `chromosome`, `tss` of every gene with a position;
 //! - `peak_rates`: `peak`, then each peak's accessibility (its reads over
@@ -216,15 +218,20 @@ pub fn run_links(
     let emb = embed_two_track(input, &cfg.embed)?;
 
     let kept: Vec<usize> = match keep {
+        // `keep` names cells as the run tags them (`Sample::cell`), as
+        // the embedding does.
         Some(set) => (0..emb.barcodes.len())
-            .filter(|&c| {
-                let b = emb.barcodes[c].as_ref();
-                set.contains(b) || b.split_once('@').is_some_and(|(raw, _)| set.contains(raw))
-            })
+            .filter(|&c| set.contains(&emb.barcodes[c]))
             .collect(),
         None => (0..emb.barcodes.len()).collect(),
     };
-    anyhow::ensure!(!kept.is_empty(), "no embedded cell passed QC");
+    anyhow::ensure!(
+        !kept.is_empty(),
+        "no embedded cell passed QC: {} cells passed, but none is named as the embedding \
+         names its cells (such as {:?})",
+        keep.map_or(0, FxHashSet::len),
+        emb.barcodes.first()
+    );
     info!("Cells: {} of {} pass QC", kept.len(), emb.barcodes.len());
     let cell_rows = emb.cell_rows.select_rows(kept.iter());
     let barcodes: Vec<Box<str>> = kept.iter().map(|&c| emb.barcodes[c].clone()).collect();
@@ -275,7 +282,7 @@ pub fn run_links(
     )?;
 
     Ok(LinkSummary {
-        n_genes: emb.rna_genes.len(),
+        n_genes: emb.genes.len(),
         n_peaks: emb.peak_names.len(),
         n_pairs: emb.pairs.n_pairs(),
         n_clusters,
@@ -567,7 +574,7 @@ fn write_links(out: &str, emb: &TwoTrackEmbedding, w: &[f32]) -> anyhow::Result<
     let gene_idx = gene_of_pair(pairs);
     let gene: Vec<Box<str>> = gene_idx
         .iter()
-        .map(|&g| emb.rna_genes[g as usize].clone())
+        .map(|&g| emb.genes[g as usize].clone())
         .collect();
     let peak: Vec<Box<str>> = pairs
         .peak
@@ -678,4 +685,42 @@ mod tests {
             run.to_str().unwrap()
         );
     }
+}
+
+/// A run's links as its `links` table has them, a row per pair.
+#[derive(Clone, Debug, Default)]
+pub struct LinkColumns {
+    pub gene: Vec<Box<str>>,
+    pub peak: Vec<Box<str>>,
+    pub distance: Vec<f64>,
+    pub abc: Vec<f64>,
+    pub gate: Vec<f64>,
+    pub corr: Vec<f64>,
+    pub score: Vec<f64>,
+}
+
+/// The links table at `links` (a trained run's `{prefix}.links.parquet`):
+/// its gene, peak, distance, abc, gate, corr and score columns.
+pub fn read_links(links: &str) -> anyhow::Result<LinkColumns> {
+    use anyhow::Context as _;
+    let (s, n) = legume_numeric::matrix::parquet::read_table_columns(
+        links,
+        &["gene", "peak"],
+        &["distance", "abc", "gate", "corr", "score"],
+    )
+    .with_context(|| format!("reading {links}"))?;
+    let (Ok([gene, peak]), Ok([distance, abc, gate, corr, score])) =
+        (<[_; 2]>::try_from(s), <[_; 5]>::try_from(n))
+    else {
+        unreachable!("the columns asked for")
+    };
+    Ok(LinkColumns {
+        gene,
+        peak,
+        distance,
+        abc,
+        gate,
+        corr,
+        score,
+    })
 }

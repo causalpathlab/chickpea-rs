@@ -1,7 +1,9 @@
 //! Gene + peak multiome embedding (bge multiome recipe).
 //!
 //! Loads RNA genes and ATAC peaks onto one feature axis with modality suffixes.
-//! Wide ATAC is `module_only` (peak row = its module row `μ_m`). Phase 2 is a
+//! A modality with at least `module_only_min_rows` rows is `module_only` (a
+//! row is its module's row `μ_m`): wide ATAC, as a rule, and RNA too when it
+//! has that many genes; a narrower ATAC keeps a row per peak. Phase 2 is a
 //! single encoder over that axis. The cis pairs go into phase 1 as gates
 //! pooling each gene's cis peaks, which its profile is aligned to; their
 //! trained shares are the links.
@@ -18,6 +20,17 @@ use rustc_hash::{FxHashMap, FxHashSet};
 pub const RNA_TAG: &str = "rna";
 /// Suffix of the ATAC peak rows on the joint axis.
 pub const ATAC_TAG: &str = "atac";
+
+/// A joint-axis row name split into its base and side (`GENE/rna`,
+/// `chr1:1-2/atac`); `None` for a name with no known modality tag.
+#[must_use]
+pub fn modality_of(name: &str) -> Option<(&str, Side)> {
+    match name.rsplit_once('/')? {
+        (base, RNA_TAG) => Some((base, Side::Rna)),
+        (base, ATAC_TAG) => Some((base, Side::Atac)),
+        _ => None,
+    }
+}
 
 /// ATAC modules are never set aside by size: the background of flat and
 /// near-empty peaks alone (chosen by activity) is flagged, never a link
@@ -40,11 +53,14 @@ pub struct TwoTrackConfig {
     pub proj_dim: usize,
     /// RNA gene modules.
     pub feature_modules: usize,
-    /// ATAC peak modules (each peak's row is its module's).
+    /// Modules of a module-only modality (each peak's row is its module's
+    /// when ATAC has at least `module_only_min_rows` peaks; unused when it
+    /// has fewer).
     pub peak_modules: usize,
     pub phase1_cells_per_pb: usize,
-    /// On the ATAC modality, module-only when it has at least this many peaks.
-    /// `0` disables. Bge default is 100_000; tests use a small threshold.
+    /// A modality is module-only when it has at least this many rows: ATAC
+    /// at this many peaks, and RNA too at this many genes. `0` disables. Bge
+    /// default is 100_000; tests use a small threshold.
     pub module_only_min_rows: usize,
     /// Weight of the gene-to-cis-peak alignment per unit (`0` off).
     pub align_weight: f32,
@@ -84,11 +100,15 @@ impl Default for TwoTrackConfig {
     }
 }
 
-/// Inputs; `gene_positions` is aligned to the RNA files' rows.
+/// Inputs; `gene_positions` is aligned to `genes`.
 pub struct TwoTrackInput<'a> {
     /// Each sample's RNA and ATAC; every RNA file has the same genes, and
     /// every ATAC file the same peaks.
     pub samples: &'a [crate::p2g::samples::Sample],
+    /// The RNA side's rows ([`samples::same_rows`] of [`Side::Rna`]).
+    pub genes: &'a [Box<str>],
+    /// The ATAC side's rows ([`samples::same_rows`] of [`Side::Atac`]).
+    pub peaks: &'a [Box<str>],
     pub batch_file: Option<&'a str>,
     pub gene_positions: &'a [Option<GeneTss>],
     pub kernel: &'a AbcKernel,
@@ -101,7 +121,8 @@ pub struct TwoTrackEmbedding {
     pub genes: Vec<Box<str>>,
     /// `[genes × H]`, RNA-track composed rows.
     pub rna_rows: nalgebra::DMatrix<f32>,
-    /// `[peaks × H]`, each peak's module embedding `μ_{m(p)}`.
+    /// `[peaks × H]`, each peak's row: its module embedding `μ_{m(p)}` when
+    /// ATAC is module-only.
     pub peak_rows: nalgebra::DMatrix<f32>,
     /// Module id of each peak (ATAC-file order).
     pub module_of_peak: Vec<u32>,
@@ -109,7 +130,6 @@ pub struct TwoTrackEmbedding {
     pub cell_rows: nalgebra::DMatrix<f32>,
     pub barcodes: Vec<Box<str>>,
     pub pairs: CisPairs,
-    pub rna_genes: Vec<Box<str>>,
     pub peak_names: Vec<Box<str>>,
     /// Phase-1 cis gate shares `w̃` (each gene's sum to 1) in [`CisPairs`]
     /// order.
@@ -128,16 +148,14 @@ pub fn embed_two_track(
     input: &TwoTrackInput,
     cfg: &TwoTrackConfig,
 ) -> anyhow::Result<TwoTrackEmbedding> {
-    let first = &input.samples[0];
-    let gene_names = samples::rows(first, Side::Rna)?;
+    let (gene_names, peak_names) = (input.genes, input.peaks);
     anyhow::ensure!(
         input.gene_positions.len() == gene_names.len(),
         "{} gene positions for {} RNA rows",
         input.gene_positions.len(),
         gene_names.len()
     );
-    let peak_names = samples::rows(first, Side::Atac)?;
-    let peaks = parse_peak_coordinates(&peak_names);
+    let peaks = parse_peak_coordinates(peak_names);
     let pairs = build_cis_pairs(input.gene_positions, &peaks, input.kernel);
     info!(
         "Cis pairs: {} genes placed of {}, {} pairs; {} of {} peaks reach no gene \
@@ -189,10 +207,10 @@ pub fn embed_two_track(
         let genes: FxHashSet<&str> = gene_names.iter().map(AsRef::as_ref).collect();
         let peaks: FxHashSet<&str> = peak_names.iter().map(AsRef::as_ref).collect();
         let keep: Vec<usize> = (0..unified.feature_names.len())
-            .filter(|&r| match unified.feature_names[r].rsplit_once('/') {
-                Some((base, RNA_TAG)) => genes.contains(base),
-                Some((base, ATAC_TAG)) => peaks.contains(base),
-                _ => true,
+            .filter(|&r| match modality_of(&unified.feature_names[r]) {
+                Some((base, Side::Rna)) => genes.contains(base),
+                Some((base, Side::Atac)) => peaks.contains(base),
+                None => true,
             })
             .collect();
         // Off the backend too, not the fit's axis alone: the projection and
@@ -216,23 +234,19 @@ pub fn embed_two_track(
     let covariates =
         super::covariate::relabel_batches(&mut unified, &cfg.covariate, cfg.proj_dim, cfg.seed)?;
 
-    let feature_names = unified.feature_names.clone();
+    let feature_names = &unified.feature_names;
     let mut rna_feat: FxHashMap<Box<str>, u32> = FxHashMap::default();
     let mut atac_feat: FxHashMap<Box<str>, u32> = FxHashMap::default();
     for (r, name) in feature_names.iter().enumerate() {
-        let Some((base, tag)) = name.rsplit_once('/') else {
-            anyhow::bail!("feature `{name}` carries no modality tag");
+        let Some((base, side)) = modality_of(name) else {
+            anyhow::bail!("feature `{name}` carries no modality tag (/{RNA_TAG} or /{ATAC_TAG})");
         };
-        match tag {
-            RNA_TAG => {
-                rna_feat.insert(base.into(), r as u32);
-            }
-            ATAC_TAG => {
-                atac_feat.insert(base.into(), r as u32);
-            }
-            _ => anyhow::bail!("feature `{name}`: unknown modality `{tag}`"),
-        }
+        match side {
+            Side::Rna => rna_feat.insert(base.into(), r as u32),
+            Side::Atac => atac_feat.insert(base.into(), r as u32),
+        };
     }
+    warn_module_only(cfg, rna_feat.len(), atac_feat.len());
 
     // ATAC modules stay inside one genomic block; RNA rows have none.
     let feature_block = {
@@ -363,7 +377,7 @@ pub fn embed_two_track(
     );
 
     let mut rna_row_idx = Vec::with_capacity(gene_names.len());
-    for g in &gene_names {
+    for g in gene_names {
         let r = *rna_feat
             .get(g.as_ref())
             .ok_or_else(|| anyhow::anyhow!("RNA gene `{g}` missing from the loaded axis"))?
@@ -372,7 +386,7 @@ pub fn embed_two_track(
     }
     let mut peak_row_idx = Vec::with_capacity(peak_names.len());
     let mut module_of_peak = Vec::with_capacity(peak_names.len());
-    for p in &peak_names {
+    for p in peak_names {
         let r = *atac_feat
             .get(p.as_ref())
             .ok_or_else(|| anyhow::anyhow!("peak `{p}` missing from the loaded axis"))?
@@ -386,7 +400,7 @@ pub fn embed_two_track(
         covariates.as_ref(),
         &unified.barcodes,
         out.batch_gene_fold.as_ref(),
-        &gene_names,
+        gene_names,
         &rna_row_idx,
     )?;
 
@@ -399,7 +413,7 @@ pub fn embed_two_track(
         .cis_gates
         .as_ref()
         .map_or((0.0, 0.0, f32::NAN), |c| (c.theta0, c.theta1, c.align_gap));
-    let (pairs, gate_w, gate_corr) = match out.cis_gates.as_ref() {
+    let (pairs, gate_w, gate_corr) = match out.cis_gates {
         Some(cis) => {
             anyhow::ensure!(
                 cis.w.len() == cis.source_idx.len() && cis.corr.len() == cis.w.len(),
@@ -427,7 +441,7 @@ pub fn embed_two_track(
                 pairs.n_pairs(),
                 cis.w.len()
             );
-            (pairs, cis.w.clone(), cis.corr.clone())
+            (pairs, cis.w, cis.corr)
         }
         None => {
             let w = pairs.weight.clone();
@@ -436,19 +450,40 @@ pub fn embed_two_track(
         }
     };
     Ok(TwoTrackEmbedding {
-        genes: gene_names.clone(),
+        genes: gene_names.to_vec(),
         rna_rows,
         peak_rows,
         module_of_peak,
         cell_rows,
-        barcodes: unified.barcodes.clone(),
+        barcodes: std::mem::take(&mut unified.barcodes),
         pairs,
-        rna_genes: gene_names,
-        peak_names,
+        peak_names: peak_names.to_vec(),
         gate_w,
         gate_corr,
         gate_theta0,
         gate_theta1,
         align_gap,
     })
+}
+
+/// Warn when the module-only rule of `cfg` does not fall as the flags
+/// read: ATAC under the threshold keeps a row per peak (`--peak-modules`
+/// unused), and RNA at the threshold goes module-only too.
+fn warn_module_only(cfg: &TwoTrackConfig, n_genes: usize, n_peaks: usize) {
+    let min = cfg.module_only_min_rows;
+    if min == 0 {
+        return;
+    }
+    if n_peaks < min {
+        log::warn!(
+            "{n_peaks} peaks < --module-only-min-rows {min}: ATAC is not module-only, so \
+             --peak-modules is unused and each peak keeps its own row"
+        );
+    }
+    if n_genes >= min {
+        log::warn!(
+            "{n_genes} genes >= --module-only-min-rows {min}: RNA is module-only too, each \
+             gene's row its module's"
+        );
+    }
 }

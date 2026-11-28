@@ -60,3 +60,12 @@ pub fn click(m: &ratatui::crossterm::event::MouseEvent) -> bool {
     use ratatui::crossterm::event::{MouseButton, MouseEventKind};
     m.kind == MouseEventKind::Down(MouseButton::Left)
 }
+
+/// Whether a character held with `m` is typed text: as it is, shifted, or
+/// by AltGr, which terminals send as Ctrl+Alt.
+#[must_use]
+pub fn typed(m: ratatui::crossterm::event::KeyModifiers) -> bool {
+    use ratatui::crossterm::event::KeyModifiers;
+    let m = m - KeyModifiers::SHIFT;
+    m.is_empty() || m == KeyModifiers::CONTROL | KeyModifiers::ALT
+}

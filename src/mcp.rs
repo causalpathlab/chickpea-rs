@@ -3,13 +3,12 @@
 //! job unless asked otherwise, since a run takes minutes to hours) in the
 //! project's records, and read the links a run wrote.
 
-use crate::p2g::workflow::{table, LINKS};
+use crate::p2g::steps::{self, not_over, takes_path, Step, P2G, REGROUP};
+use crate::p2g::workflow::{read_links, table, LinkColumns, LINKS};
 use crate::p2g::{PeakToGeneArgs, RegroupArgs};
 use anyhow::Context;
-use clap::{Args, FromArgMatches};
-use legume_mcp::cli::{check, describe, settable, to_argv};
+use legume_mcp::cli::{check, describe, find, settable, to_argv};
 use legume_mcp::{command_line, parse_args, shown_path, Call, Content, Handler, ToolSpec};
-use legume_numeric::matrix::parquet::read_table_columns;
 use rustc_hash::FxHashSet;
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
@@ -93,16 +92,85 @@ pub struct Server {
 
 impl Default for Server {
     fn default() -> Self {
-        let mut cli = PeakToGeneArgs::augment_args(clap::Command::new("chickpea peak-to-gene"));
-        cli.build();
-        let mut regroup = RegroupArgs::augment_args(clap::Command::new("chickpea regroup"));
-        regroup.build();
         Server {
-            cli,
-            regroup,
+            cli: (P2G.build)("chickpea peak-to-gene"),
+            regroup: (REGROUP.build)("chickpea regroup"),
             viewer: Default::default(),
         }
     }
+}
+
+/// The flags (clap ids) whose value names a file a run writes, though
+/// their declaration does not say it is a path (data-beans' `--qc-report`):
+/// made absolute as the agent's flags come in, before the line is parsed,
+/// so before its outputs are known.
+const WRITES: [&str; 1] = ["qc_report"];
+
+/// `flags` (an agent's map of flag to value) with each path from the
+/// project's root, as [`push_paths`] gives the run's own: the values of
+/// every flag that takes one, or that names a file the run writes. Unknown
+/// flags and those of `own` (the tool's own arguments) are left for
+/// [`to_argv`] to refuse.
+fn absolute_flags(
+    cmd: &clap::Command,
+    flags: &Map<String, Value>,
+    own: &[&str],
+) -> Map<String, Value> {
+    let mut out = flags.clone();
+    for (key, value) in &mut out {
+        let Some(arg) = find(cmd, key) else { continue };
+        let id = arg.get_id().as_str();
+        if own.contains(&id) || (!takes_path(arg) && !WRITES.contains(&id)) {
+            continue;
+        }
+        let absolute = |v: &mut Value| {
+            if let Value::String(p) = v {
+                *p = shown_path(Path::new(p.as_str()));
+            }
+        };
+        match value {
+            Value::Array(vs) => vs.iter_mut().for_each(absolute),
+            v => absolute(v),
+        }
+    }
+    out
+}
+
+/// `out` as given, from the project's root; else the first prefix named
+/// `name` under the project's results at which `outputs_of` finds nothing.
+fn out_prefix(
+    cx: &Call,
+    out: Option<&str>,
+    name: &str,
+    outputs_of: fn(&str) -> Vec<PathBuf>,
+) -> anyhow::Result<String> {
+    Ok(match out.map(str::trim) {
+        Some(out) if !out.is_empty() => shown_path(Path::new(out)),
+        _ => {
+            cx.free_prefix(name, |out| Ok(outputs_of(out)), |_| false)
+                .context("give out, the output prefix")?
+                .0
+        }
+    })
+}
+
+/// What `argv` writes, checked as `step` (whose command line is `cmd`)
+/// parses it, its files to read there, each from the project's root;
+/// refused when it would write over a run, with what to do `instead`.
+fn checked_outputs(
+    step: &Step,
+    cmd: &clap::Command,
+    argv: &[String],
+    instead: &str,
+) -> anyhow::Result<Vec<PathBuf>> {
+    let m = check(cmd, argv)?;
+    let made: Vec<PathBuf> = steps::checked(step, cmd, &m)
+        .map_err(anyhow::Error::msg)?
+        .iter()
+        .map(|p| shown_path(p).into())
+        .collect();
+    not_over(&made, instead)?;
+    Ok(made)
 }
 
 impl Handler for Server {
@@ -136,8 +204,11 @@ impl Server {
     }
 
     fn run(&self, a: RunArgs, cx: &Call) -> anyhow::Result<Value> {
-        // The flags first, so a misplaced input is named as such.
-        let flags = to_argv(&self.cli, &a.flags, &OWN.map(|id| (id, id)), "p2g_flags")?;
+        // The flags first, so a tool argument given among them (an input
+        // named there) is refused as misplaced; the files the line reads
+        // are checked once it is whole, in `checked_outputs`.
+        let flags = absolute_flags(&self.cli, &a.flags, &OWN);
+        let flags = to_argv(&self.cli, &flags, &OWN.map(|id| (id, id)), "p2g_flags")?;
         let positions = match (&a.gene_coords, &a.gff_file) {
             (Some(tsv), None) => ("--gene-coords", tsv),
             (None, Some(gff)) => ("--gff-file", gff),
@@ -146,7 +217,7 @@ impl Server {
         let mut argv: Vec<String> = Vec::new();
         for (flag, paths) in [("--data", &a.data), ("--rna", &a.rna), ("--atac", &a.atac)] {
             if let Some(p) = paths {
-                push_paths(&mut argv, flag, &p.0)?;
+                push_paths(&mut argv, flag, &p.0);
             }
         }
         for (flag, path) in [positions]
@@ -154,31 +225,12 @@ impl Server {
             .chain(a.batch.as_ref().map(|b| ("--batch", b)))
             .chain(a.groups.as_ref().map(|g| ("--groups", g)))
         {
-            push_paths(&mut argv, flag, std::slice::from_ref(path))?;
+            push_paths(&mut argv, flag, std::slice::from_ref(path));
         }
-        let out = match a.out.as_deref().map(str::trim) {
-            Some(out) if !out.is_empty() => shown_path(Path::new(out)),
-            _ => {
-                cx.free_prefix("p2g", |out| Ok(PeakToGeneArgs::outputs_of(out)), |_| false)
-                    .context("give out, the output prefix")?
-                    .0
-            }
-        };
+        let out = out_prefix(cx, a.out.as_deref(), "p2g", PeakToGeneArgs::outputs_of)?;
         argv.extend(["--out".into(), out.clone()]);
         argv.extend(flags);
-        let parsed = PeakToGeneArgs::from_arg_matches(&check(&self.cli, &argv)?)?;
-        parsed.check_pairs()?;
-        let made: Vec<PathBuf> = parsed
-            .outputs()
-            .iter()
-            .map(|p| shown_path(p).into())
-            .collect();
-        if let Some(there) = made.iter().find(|p| p.exists()) {
-            anyhow::bail!(
-                "{} exists: a run is not written over; give another out or path",
-                there.display()
-            );
-        }
+        let made = checked_outputs(&P2G, &self.cli, &argv, "give another out or path")?;
 
         let files: Vec<&str> = [&a.data, &a.rna, &a.atac]
             .into_iter()
@@ -199,31 +251,13 @@ impl Server {
         crate::p2g::workflow::trained_run(&run)?;
         argv.extend(["--run".into(), run.clone()]);
         if !a.atac.0.is_empty() {
-            push_paths(&mut argv, "--atac", &a.atac.0)?;
+            push_paths(&mut argv, "--atac", &a.atac.0);
         }
-        push_paths(&mut argv, "--groups", std::slice::from_ref(&a.groups))?;
-        let out = match a.out.as_deref().map(str::trim) {
-            Some(out) if !out.is_empty() => shown_path(Path::new(out)),
-            _ => {
-                let made = |out: &str| Ok(RegroupArgs::outputs_of(out));
-                let name = format!("regroup.{}", groups_name(&a.groups));
-                cx.free_prefix(&name, made, |_| false)
-                    .context("give out, the output prefix")?
-                    .0
-            }
-        };
+        push_paths(&mut argv, "--groups", std::slice::from_ref(&a.groups));
+        let name = format!("regroup.{}", groups_name(&a.groups));
+        let out = out_prefix(cx, a.out.as_deref(), &name, RegroupArgs::outputs_of)?;
         argv.extend(["--out".into(), out.clone()]);
-        let made: Vec<PathBuf> = RegroupArgs::from_arg_matches(&check(&self.regroup, &argv)?)?
-            .outputs()
-            .iter()
-            .map(|p| shown_path(p).into())
-            .collect();
-        if let Some(there) = made.iter().find(|p| p.exists()) {
-            anyhow::bail!(
-                "{} exists: a run is not written over; give another out",
-                there.display()
-            );
-        }
+        let made = checked_outputs(&REGROUP, &self.regroup, &argv, "give another out")?;
         let summary = format!("{run}'s links regrouped by {}", a.groups);
         let command = [String::from("regroup")]
             .into_iter()
@@ -384,14 +418,15 @@ fn links(a: LinksArgs) -> anyhow::Result<Value> {
     let prefix = crate::p2g::workflow::prefix_of(&shown_path(Path::new(&a.out)));
     let file = table(&crate::p2g::workflow::trained_run(&prefix)?, LINKS);
     let file = shown_path(&crate::p2g::workflow::tidy(Path::new(&file)));
-    let (s, n) = read_table_columns(
-        &file,
-        &["gene", "peak"],
-        &["distance", "abc", "gate", "corr", "score"],
-    )?;
-    let ([gene, peak], [distance, abc, gate, corr, score]) = (&s[..], &n[..]) else {
-        unreachable!("the columns asked for")
-    };
+    let LinkColumns {
+        gene,
+        peak,
+        distance,
+        abc,
+        gate,
+        corr,
+        score,
+    } = read_links(&file)?;
     let wanted: FxHashSet<&str> = a.genes.iter().map(String::as_str).collect();
     let mut rows: Vec<usize> = (0..gene.len())
         .filter(|&i| wanted.is_empty() || wanted.contains(&*gene[i]))
@@ -407,7 +442,7 @@ fn links(a: LinksArgs) -> anyhow::Result<Value> {
         .iter()
         .filter(|g| !linked.contains(g.as_str()))
         .collect();
-    best_first(score, &mut rows, a.top);
+    best_first(&score, &mut rows, a.top);
     let links: Vec<Value> = rows
         .into_iter()
         .map(|i| {
@@ -451,17 +486,11 @@ struct RunArgs {
     background: bool,
 }
 
-/// `flag` and `paths`, each from the project's root and refused unless it
-/// exists: the records' replay of a run reads the same files wherever it
-/// starts.
-fn push_paths(argv: &mut Vec<String>, flag: &str, paths: &[String]) -> anyhow::Result<()> {
+/// `flag` and `paths`, each from the project's root: the records' replay
+/// of a run reads the same files wherever it starts.
+fn push_paths(argv: &mut Vec<String>, flag: &str, paths: &[String]) {
     argv.push(flag.into());
-    for path in paths {
-        let path = shown_path(Path::new(path));
-        anyhow::ensure!(Path::new(&path).exists(), "{flag} {path} does not exist");
-        argv.push(path);
-    }
-    Ok(())
+    argv.extend(paths.iter().map(|p| shown_path(Path::new(p))));
 }
 
 /// Paths, one per sample: a list, or one path as a string.
