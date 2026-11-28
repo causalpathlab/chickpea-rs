@@ -78,12 +78,13 @@ pub enum Summary {
 }
 
 impl Summary {
-    /// In a few words: `best`, `links ≥ 0.1`.
+    /// In a few words, led by the word MCP's `summary` takes: `best`,
+    /// `count ≥ 0.1`.
     #[must_use]
     pub fn name(self) -> String {
         match self {
             Summary::Best => "best".into(),
-            Summary::Count(c) => format!("links ≥ {c}"),
+            Summary::Count(c) => format!("count ≥ {c}"),
         }
     }
 }

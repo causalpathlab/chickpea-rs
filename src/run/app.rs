@@ -12,7 +12,7 @@ use legume_tui::browse::shown;
 use legume_tui::form::{Form, Kind, Many};
 use legume_tui::keys::{is_click_or_wheel, is_stray, list_move, wheel_key};
 use legume_tui::{is_run_key, Round};
-use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent};
+use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, MouseEvent};
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
@@ -325,9 +325,9 @@ impl App {
                 KeyCode::Backspace => {
                     text.pop();
                 }
-                // Typed text: a character as it is, or shifted; not one
-                // held with Ctrl or Alt.
-                KeyCode::Char(c) if (k.modifiers - KeyModifiers::SHIFT).is_empty() => {
+                // Typed text: a character as it is, shifted, or by AltGr
+                // (sent as Ctrl+Alt); not one held with Ctrl or Alt alone.
+                KeyCode::Char(c) if crate::tui::typed(k.modifiers) => {
                     text.push(c);
                 }
                 _ => {}
@@ -348,6 +348,15 @@ impl App {
             KeyCode::Tab => return self.next_pane(1),
             KeyCode::BackTab => return self.next_pane(-1),
             _ => {}
+        }
+        // A line given after `--` runs as given: its panes show it, and
+        // only move, so no edit there is silently left out of the run.
+        let edits = !matches!(k.code, KeyCode::Char('q') | KeyCode::Esc)
+            && legume_tui::keys::list_delta(&k, true).is_none();
+        if self.given.is_some() && self.pane != Pane::Run && edits {
+            self.note =
+                Some("this line was given after `--` and runs as given; change it there".into());
+            return;
         }
         match self.pane {
             Pane::Data => self.data_key(k),
@@ -656,6 +665,7 @@ fn status(app: &App) -> String {
 mod tests {
     use super::*;
     use ratatui::backend::TestBackend;
+    use ratatui::crossterm::event::KeyModifiers;
     use ratatui::Terminal;
 
     fn screen(app: &App) -> String {
@@ -790,12 +800,24 @@ mod tests {
         // Its inputs must be there.
         let mut gone = argv.clone();
         gone[2] = dir.path().join("no.h5").to_string_lossy().into_owned();
-        let app = App::given(&STEPS[0], &gone);
-        let why = app.check.unwrap_err();
+        let mut app = App::given(&STEPS[0], &gone);
+        let why = app.check.clone().unwrap_err();
         assert!(
             why.contains("no.h5") && why.contains("does not exist"),
             "{why}"
         );
+
+        // Its panes only move: an edit there would not reach the run.
+        let env = legume_tui::ChildEnv::default();
+        for pane in [Pane::Data, Pane::Form] {
+            app.pane = pane;
+            app.note = None;
+            app.key(KeyEvent::from(KeyCode::Enter), &env);
+            assert!(app.editing.is_none() && app.pick.is_none());
+            assert!(app.note.as_deref().is_some_and(|n| n.contains("as given")));
+        }
+        app.key(KeyEvent::from(KeyCode::Down), &env);
+        assert_eq!(app.command()[1..], gone[..]);
     }
 
     #[test]

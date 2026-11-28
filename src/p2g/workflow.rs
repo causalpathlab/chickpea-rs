@@ -225,7 +225,13 @@ pub fn run_links(
             .collect(),
         None => (0..emb.barcodes.len()).collect(),
     };
-    anyhow::ensure!(!kept.is_empty(), "no embedded cell passed QC");
+    anyhow::ensure!(
+        !kept.is_empty(),
+        "no embedded cell passed QC: {} cells passed, but none is named as the embedding \
+         names its cells (such as {:?})",
+        keep.map_or(0, FxHashSet::len),
+        emb.barcodes.first()
+    );
     info!("Cells: {} of {} pass QC", kept.len(), emb.barcodes.len());
     let cell_rows = emb.cell_rows.select_rows(kept.iter());
     let barcodes: Vec<Box<str>> = kept.iter().map(|&c| emb.barcodes[c].clone()).collect();

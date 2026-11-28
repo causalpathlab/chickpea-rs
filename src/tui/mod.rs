@@ -62,3 +62,12 @@ pub fn wheel(m: &ratatui::crossterm::event::MouseEvent) -> Option<isize> {
 pub fn click(m: &ratatui::crossterm::event::MouseEvent) -> bool {
     legume_tui::keys::is_click_or_wheel(m) && legume_tui::keys::wheel_key(m).is_none()
 }
+
+/// Whether a character held with `m` is typed text: as it is, shifted, or
+/// by AltGr, which terminals send as Ctrl+Alt.
+#[must_use]
+pub fn typed(m: ratatui::crossterm::event::KeyModifiers) -> bool {
+    use ratatui::crossterm::event::KeyModifiers;
+    let m = m - KeyModifiers::SHIFT;
+    m.is_empty() || m == KeyModifiers::CONTROL | KeyModifiers::ALT
+}

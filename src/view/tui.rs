@@ -218,10 +218,6 @@ impl Screen {
     }
 
     fn key(&mut self, k: KeyEvent) {
-        // Ctrl+S is no `s`, nor Ctrl+Q a `q`.
-        if legume_tui::keys::is_stray(&k) {
-            return;
-        }
         if let Some(text) = self.search.as_mut() {
             match k.code {
                 KeyCode::Enter => {
@@ -246,9 +242,14 @@ impl Screen {
                 KeyCode::Backspace => {
                     text.pop();
                 }
-                KeyCode::Char(c) => text.push(c),
+                // Typed text, AltGr's too; not one held with Ctrl or Alt.
+                KeyCode::Char(c) if crate::tui::typed(k.modifiers) => text.push(c),
                 _ => {}
             }
+            return;
+        }
+        // Ctrl+S is no `s`, nor Ctrl+Q a `q`.
+        if legume_tui::keys::is_stray(&k) {
             return;
         }
         let moved = legume_tui::keys::list_step(&mut self.at, self.ranked.len(), &k, true);
