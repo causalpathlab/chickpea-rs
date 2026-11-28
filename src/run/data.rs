@@ -113,11 +113,6 @@ impl Data {
                 what.join(" and ")
             ));
         }
-        self.gap()
-    }
-
-    /// A sample without one of its files.
-    fn gap(&self) -> Option<String> {
         self.pairs.iter().enumerate().find_map(|(i, p)| {
             let missing = SIDES.iter().find(|&&s| p.get(s).is_none())?;
             Some(format!("sample {} has no {} file", i + 1, missing.title()))
@@ -129,7 +124,7 @@ impl Data {
     #[must_use]
     pub fn names(&self) -> Vec<Option<String>> {
         let none = vec![None; self.pairs.len()];
-        if self.pairs.is_empty() || self.gap().is_some() {
+        if self.problem(false).is_some() {
             return none;
         }
         let list = |s: Side| -> Vec<Box<str>> {

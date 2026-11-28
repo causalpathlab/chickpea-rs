@@ -43,24 +43,22 @@ impl ListHit {
     }
 }
 
-/// A wheel turn as a step through a list: up −1, down +1 (legume-tui's
-/// [`legume_tui::keys::wheel_key`], as a step).
+/// A wheel turn as a step through a list: up −1, down +1.
 #[must_use]
 pub fn wheel(m: &ratatui::crossterm::event::MouseEvent) -> Option<isize> {
-    legume_tui::keys::wheel_key(m).map(|k| {
-        if k.code == ratatui::crossterm::event::KeyCode::Up {
-            -1
-        } else {
-            1
-        }
-    })
+    use ratatui::crossterm::event::MouseEventKind;
+    match m.kind {
+        MouseEventKind::ScrollUp => Some(-1),
+        MouseEventKind::ScrollDown => Some(1),
+        _ => None,
+    }
 }
 
-/// Whether `m` is a press of the left button: legume-tui's
-/// [`legume_tui::keys::is_click_or_wheel`], not a turn of the wheel.
+/// Whether `m` is a press of the left button.
 #[must_use]
 pub fn click(m: &ratatui::crossterm::event::MouseEvent) -> bool {
-    legume_tui::keys::is_click_or_wheel(m) && legume_tui::keys::wheel_key(m).is_none()
+    use ratatui::crossterm::event::{MouseButton, MouseEventKind};
+    m.kind == MouseEventKind::Down(MouseButton::Left)
 }
 
 /// Whether a character held with `m` is typed text: as it is, shifted, or

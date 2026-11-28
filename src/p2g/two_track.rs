@@ -237,19 +237,16 @@ pub fn embed_two_track(
     let feature_names = &unified.feature_names;
     let mut rna_feat: FxHashMap<Box<str>, u32> = FxHashMap::default();
     let mut atac_feat: FxHashMap<Box<str>, u32> = FxHashMap::default();
-    // Rows per side, as the fit counts them for the module-only rule.
-    let mut n_rows = [0usize; 2];
     for (r, name) in feature_names.iter().enumerate() {
         let Some((base, side)) = modality_of(name) else {
             anyhow::bail!("feature `{name}` carries no modality tag (/{RNA_TAG} or /{ATAC_TAG})");
         };
-        n_rows[side as usize] += 1;
         match side {
             Side::Rna => rna_feat.insert(base.into(), r as u32),
             Side::Atac => atac_feat.insert(base.into(), r as u32),
         };
     }
-    warn_module_only(cfg, n_rows[Side::Rna as usize], n_rows[Side::Atac as usize]);
+    warn_module_only(cfg, rna_feat.len(), atac_feat.len());
 
     // ATAC modules stay inside one genomic block; RNA rows have none.
     let feature_block = {

@@ -177,11 +177,10 @@ impl Genome {
         view: &super::figure::GenomeView,
     ) -> impl Iterator<Item = &'a (usize, u64, f32)> {
         let len = self.len().max(1) as f32;
-        let (from, span) = view.window();
-        self.points.iter().filter(move |p| {
-            let t = p.1 as f32 / len;
-            t >= from && t <= from + span
-        })
+        let view = view.clone();
+        self.points
+            .iter()
+            .filter(move |p| view.sees(p.1 as f32 / len))
     }
 
     /// The points in sight of `view` with a value above 0, best first.
