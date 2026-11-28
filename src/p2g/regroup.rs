@@ -97,9 +97,7 @@ pub fn run_regroup(args: &RegroupArgs) -> anyhow::Result<()> {
         from != *args.out,
         "--out is the run itself: give the regrouped run an out of its own"
     );
-    if let Some(there) = args.outputs().iter().find(|p| p.exists()) {
-        anyhow::bail!("{} exists: a run is not written over", there.display());
-    }
+    crate::p2g::steps::not_over(&args.outputs(), "give another --out")?;
     let groups = Groups::read(&args.groups)?;
     mkdir_parent(&args.out)?;
 

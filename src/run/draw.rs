@@ -209,7 +209,14 @@ fn form(f: &mut Frame, app: &App, area: Rect, look: &Look, drawn: &mut Drawn) {
                 (Some(text), true) => format!("{text}▏"),
                 _ => field.shown(),
             };
-            let style = if at { look.selected } else { look.page };
+            // An advanced row (a flag --help hides) is dim.
+            let style = if at {
+                look.selected
+            } else if field.advanced {
+                look.hint
+            } else {
+                look.page
+            };
             let blame = (blamed == Some(field.long.as_str())).then_some("← here");
             row_line(field, at, width, look, style, shown, blame)
         })
@@ -225,7 +232,7 @@ fn form(f: &mut Frame, app: &App, area: Rect, look: &Look, drawn: &mut Drawn) {
     let how = match field.kind {
         Kind::Flag { .. } => "enter toggles",
         Kind::Choice(_) => "←/→ or enter changes",
-        Kind::Text if field.takes_path() => {
+        Kind::Text if super::app::browses(field) => {
             "enter browses for the file, e types it (empty: default)"
         }
         Kind::Text => "enter types a value (empty: default)",

@@ -26,6 +26,7 @@ pub struct PeakToGeneArgs {
         long,
         num_args = 1..,
         conflicts_with_all = ["rna", "atac"],
+        value_hint = clap::ValueHint::FilePath,
         help = "Count files in any order: RNA, ATAC, or both in one file, paired by name",
         long_help = "Count files (zarr/h5) in any order, in place of --rna and --atac.\n\
                      Each is told RNA, ATAC, or both (genes and peaks as rows of one\n\
@@ -41,6 +42,7 @@ pub struct PeakToGeneArgs {
         long,
         num_args = 1..,
         requires = "atac",
+        value_hint = clap::ValueHint::FilePath,
         help = "RNA gene counts (zarr/h5), one file per sample",
         long_help = "RNA gene counts (zarr/h5), one file per sample. With several\n\
                      samples, each sample's cells are {barcode}@{sample}, the sample\n\
@@ -54,6 +56,7 @@ pub struct PeakToGeneArgs {
         long,
         num_args = 1..,
         requires = "rna",
+        value_hint = clap::ValueHint::FilePath,
         help = "ATAC peak counts (zarr/h5) for the same barcodes, one file per sample in --rna's order"
     )]
     #[serde(skip)]
@@ -454,7 +457,7 @@ mod tests {
 
     #[test]
     fn the_record_keeps_every_flag_but_the_files_device_and_reports() {
-        let cmd = PeakToGeneArgs::augment_args(clap::Command::new("p2g"));
+        let cmd = crate::p2g::steps::built::<PeakToGeneArgs>("p2g");
         let m = cmd
             .clone()
             .try_get_matches_from([

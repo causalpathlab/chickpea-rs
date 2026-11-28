@@ -101,17 +101,12 @@ impl Data {
             .collect()
     }
 
-    /// Why the rows cannot run yet: no files (unless `by_flag`, the count
-    /// files given in any order as the form's `--data`), or a sample
-    /// without one.
+    /// Why the rows cannot run yet: no files, or a sample without one.
     #[must_use]
-    pub fn problem(&self, by_flag: bool) -> Option<String> {
-        if self.pairs.is_empty() && !by_flag {
+    pub fn problem(&self) -> Option<String> {
+        if self.pairs.is_empty() {
             let what: Vec<&str> = SIDES.iter().map(|s| s.title()).collect();
-            return Some(format!(
-                "add the {} files (a), or set --data",
-                what.join(" and ")
-            ));
+            return Some(format!("add the {} files (a)", what.join(" and ")));
         }
         self.pairs.iter().enumerate().find_map(|(i, p)| {
             let missing = SIDES.iter().find(|&&s| p.get(s).is_none())?;
@@ -124,7 +119,7 @@ impl Data {
     #[must_use]
     pub fn names(&self) -> Vec<Option<String>> {
         let none = vec![None; self.pairs.len()];
-        if self.problem(false).is_some() {
+        if self.problem().is_some() {
             return none;
         }
         let list = |s: Side| -> Vec<Box<str>> {
@@ -230,6 +225,25 @@ pub fn told(files: Vec<PathBuf>) -> Vec<(PathBuf, Holds)> {
         .collect()
 }
 
+/// Each of `files` with what it holds as the run tells `--data` apart:
+/// by its rows, so the rows they make pair as the run's samples would;
+/// by its name when it cannot be read (else as RNA, and the run says why).
+/// Slow: every file is opened.
+#[must_use]
+pub fn told_as_run(files: Vec<PathBuf>) -> Vec<(PathBuf, Holds)> {
+    files
+        .into_iter()
+        .map(|f| {
+            let p = f.to_string_lossy();
+            let h = samples::holds(&p)
+                .ok()
+                .or_else(|| samples::holds_by_name(&p))
+                .unwrap_or(Holds::Rna);
+            (f, h)
+        })
+        .collect()
+}
+
 /// Whether the names of all `files` say what they hold, so telling them
 /// apart opens none.
 #[must_use]
@@ -272,7 +286,7 @@ mod tests {
                 Pair([Some(p("s2.gex.h5")), Some(p("s2.atac.zarr.zip"))]),
             ]
         );
-        assert_eq!(d.problem(false), None);
+        assert_eq!(d.problem(), None);
         assert_eq!(
             d.argv(),
             [
@@ -309,10 +323,10 @@ mod tests {
     fn a_missing_side_is_filled_by_the_next_files() {
         let mut d = Data::default();
         d.add(vec![p("s1_rna.h5")]);
-        assert!(d.problem(false).unwrap().contains("no ATAC"));
+        assert!(d.problem().unwrap().contains("no ATAC"));
         d.add(vec![p("s1_atac.h5")]);
         assert_eq!(d.pairs.len(), 1);
-        assert_eq!(d.problem(false), None);
+        assert_eq!(d.problem(), None);
         assert_eq!(d.names(), [None], "one sample keeps its barcodes");
     }
 }

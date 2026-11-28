@@ -86,7 +86,7 @@ enum Commands {
                       `chickpea view {out}` looks at them; `chickpea regroup` redoes\n\
                       the groups.",
         after_long_help = ENV_HELP,
-        aliases = mcp::P2G_ALIASES
+        aliases = p2g::steps::P2G_ALIASES
     )]
     PeakToGene(Box<p2g::PeakToGeneArgs>),
 
@@ -140,8 +140,9 @@ enum Commands {
          each is told RNA, ATAC or both (genes and peaks in one file) and\n\
          paired with its sample's by name.\n\
          Tab goes to the flags: each flag of the step is a row of the form,\n\
-         with its help; enter changes the row under the cursor (a file flag\n\
-         opens the browser, e types it), d puts it back to its default.\n\
+         with its help (those --help hides dim, at the end); enter changes\n\
+         the row under the cursor (a file flag opens the browser, e types\n\
+         it), d puts it back to its default.\n\
          The mouse works too: a click picks a row, a second click changes it,\n\
          the wheel scrolls, and the tabs at the top switch panes.\n\
          The command line the form stands for is shown at the foot, checked\n\
