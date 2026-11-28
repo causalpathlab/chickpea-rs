@@ -1,8 +1,8 @@
 //! `--covariate` on the planted fixture: cells with a planted mitochondrial
 //! share get bins of their own, scored on the RNA rows alone.
 
-use crate::common::{gene_positions, kernel, write_fixture_with, N_CELLS};
-use chickpea::p2g::two_track::{embed_two_track, TwoTrackConfig, TwoTrackInput};
+use crate::common::{gene_positions, small_config, write_fixture_with, Fixture, N_CELLS};
+use chickpea::p2g::two_track::{embed_two_track, TwoTrackConfig};
 use genomic_data::covariate::{files, CovariateArgs, CovariateModel};
 
 /// The 13 mitochondrially encoded protein-coding genes (HGNC group 1974).
@@ -29,34 +29,17 @@ fn try_embed(
     epochs: usize,
     covariate: CovariateArgs,
 ) -> anyhow::Result<(String, usize)> {
-    let (rna, atac) = write_fixture_with(dir, &MITO, |c| if high_mito(c) { 20.0 } else { 1.0 });
+    let files = write_fixture_with(dir, &MITO, |c| if high_mito(c) { 20.0 } else { 1.0 });
     let mut genes = gene_positions();
     genes.extend(MITO.iter().map(|_| None));
-    let work = dir.join("run").to_string_lossy().into_owned();
+    let fixture = Fixture::new(dir, files, genes);
     let cfg = TwoTrackConfig {
-        embedding_dim: 8,
         epochs,
-        num_levels: 2,
-        sort_dim: 3,
-        proj_dim: 8,
-        feature_modules: 4,
-        peak_modules: 4,
-        phase1_cells_per_pb: 4,
-        module_only_min_rows: 30,
         covariate,
-        ..TwoTrackConfig::default()
+        ..small_config()
     };
-    let samples =
-        chickpea::p2g::samples::pair(&[rna.as_str().into()], &[atac.as_str().into()]).unwrap();
-    let input = TwoTrackInput {
-        samples: &samples,
-        batch_file: None,
-        gene_positions: &genes,
-        kernel: &kernel(),
-        work_prefix: &work,
-    };
-    let out = embed_two_track(&input, &cfg)?;
-    Ok((work, out.cell_rows.nrows()))
+    let out = embed_two_track(&fixture.input(), &cfg)?;
+    Ok((fixture.work, out.cell_rows.nrows()))
 }
 
 #[test]

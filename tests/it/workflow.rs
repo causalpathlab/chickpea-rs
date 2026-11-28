@@ -1,47 +1,30 @@
 //! The whole link workflow on the planted fixture.
 
 use crate::common::{
-    self, gene_positions, kernel, write_fixture, N_CELLS, N_GENES, PEAKS_PER_GENE,
+    self, gene_positions, small_config, write_fixture, Fixture, N_CELLS, N_GENES, PEAKS_PER_GENE,
 };
-use chickpea::p2g::two_track::{TwoTrackConfig, TwoTrackInput};
 use chickpea::p2g::workflow::{run_links, LinkConfig};
 use legume_numeric::matrix::parquet::read_table_columns;
 use std::collections::HashMap;
 
 fn small() -> LinkConfig {
     LinkConfig {
-        embed: TwoTrackConfig {
-            embedding_dim: 8,
-            epochs: 60,
-            num_levels: 2,
-            sort_dim: 3,
-            proj_dim: 8,
-            feature_modules: 4,
-            peak_modules: 4,
-            phase1_cells_per_pb: 4,
-            module_only_min_rows: 30,
-            ..TwoTrackConfig::default()
-        },
+        embed: small_config(),
         ..LinkConfig::default()
     }
+}
+
+/// The fixture, written to `dir`, as the workflow's input.
+fn fixture(dir: &std::path::Path) -> Fixture {
+    Fixture::new(dir, write_fixture(dir), gene_positions())
 }
 
 #[test]
 fn the_workflow_writes_consistent_tables() {
     let dir = tempfile::tempdir().unwrap();
-    let (rna, atac) = write_fixture(dir.path());
-    let out = dir.path().join("run").to_string_lossy().into_owned();
-    let genes = gene_positions();
-    let samples =
-        chickpea::p2g::samples::pair(&[rna.as_str().into()], &[atac.as_str().into()]).unwrap();
-    let input = TwoTrackInput {
-        samples: &samples,
-        batch_file: None,
-        gene_positions: &genes,
-        kernel: &kernel(),
-        work_prefix: &out,
-    };
-    let summary = run_links(&input, &small(), None).unwrap();
+    let fixture = fixture(dir.path());
+    let out = &fixture.work;
+    let summary = run_links(&fixture.input(), &small(), None).unwrap();
     // Pairs to near-empty or scattered peaks are dropped, never added.
     let n_pairs = summary.n_pairs;
     assert!(
@@ -133,24 +116,14 @@ fn the_workflow_writes_consistent_tables() {
 #[test]
 fn qc_failed_cells_are_left_out_of_every_cell_output() {
     let dir = tempfile::tempdir().unwrap();
-    let (rna, atac) = write_fixture(dir.path());
-    let out = dir.path().join("run").to_string_lossy().into_owned();
-    let genes = gene_positions();
-    let samples =
-        chickpea::p2g::samples::pair(&[rna.as_str().into()], &[atac.as_str().into()]).unwrap();
-    let input = TwoTrackInput {
-        samples: &samples,
-        batch_file: None,
-        gene_positions: &genes,
-        kernel: &kernel(),
-        work_prefix: &out,
-    };
+    let fixture = fixture(dir.path());
+    let out = &fixture.work;
     let dropped = ["CELL1", "CELL2", "CELL7"];
     let keep: rustc_hash::FxHashSet<Box<str>> = common::names("CELL", N_CELLS)
         .into_iter()
         .filter(|b| !dropped.contains(&b.as_ref()))
         .collect();
-    run_links(&input, &small(), Some(&keep)).unwrap();
+    run_links(&fixture.input(), &small(), Some(&keep)).unwrap();
 
     let (cells, _) =
         read_table_columns(&format!("{out}.cell_clusters.parquet"), &["cell"], &[]).unwrap();

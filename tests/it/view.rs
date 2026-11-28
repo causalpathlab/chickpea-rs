@@ -1,31 +1,12 @@
 //! `chickpea view`'s reading of a finished run.
 
-use crate::common::{chickpea, gene_names, small, write_fixture, write_gene_coords};
+use crate::common::{gene_names, run_p2g};
 use chickpea::view::data::{Measure, Run};
 use serde_json::{json, Value};
 
 /// A run on the fixture, its genes reaching their own peaks only.
 fn run(dir: &std::path::Path) -> Run {
-    Run::open(&run_at(dir)).unwrap()
-}
-
-/// [`run`], by its out prefix.
-fn run_at(dir: &std::path::Path) -> String {
-    let (rna, atac) = write_fixture(dir);
-    let genes = write_gene_coords(dir);
-    let out = dir.join("run").to_string_lossy().into_owned();
-    let st = chickpea()
-        .args(["peak-to-gene", "--rna", &rna, "--atac", &atac])
-        .args(["--gene-coords", &genes, "--cis-window", "10000", "-o", &out])
-        .args(small())
-        .output()
-        .unwrap();
-    assert!(
-        st.status.success(),
-        "{}",
-        String::from_utf8_lossy(&st.stderr)
-    );
-    out
+    Run::open(&run_p2g(dir, &[])).unwrap()
 }
 
 #[test]
@@ -91,7 +72,7 @@ fn a_genes_neighbours_are_the_nearest_linked_genes_either_way() {
 #[test]
 fn a_refused_locus_call_changes_no_setting() {
     let dir = tempfile::tempdir().unwrap();
-    let out = run_at(dir.path());
+    let out = run_p2g(dir.path(), &[]);
     let names = gene_names();
     let mut s = crate::mcp::Session::start(dir.path());
     s.call("view_open", json!({"prefix": out})).unwrap();

@@ -4,7 +4,7 @@ use crate::common::{self, write_fixture, write_gene_coords};
 use serde_json::{json, Value};
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::process::{Child, ChildStdin, ChildStdout, Stdio};
 
 /// A running `chickpea mcp`, keeping its records under `project`. It runs
 /// in a folder of its own, so a relative path that resolved against its
@@ -28,7 +28,7 @@ impl Session {
     /// as given (relative to `cwd`, maybe).
     /// `keep` is a folder to remove when the session ends.
     fn start_in(cwd: &Path, project: &Path, keep: Option<tempfile::TempDir>) -> Self {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_chickpea"))
+        let mut child = common::chickpea()
             .arg("mcp")
             .current_dir(cwd)
             .env("LEGUME_MCP_PROJECT", project)
@@ -439,6 +439,10 @@ fn without_qc_no_report_is_expected() {
             .iter()
             .any(|w| w.as_str().unwrap().ends_with("qc.tsv")),
         "{ran}"
+    );
+    assert!(
+        !dir.path().join("qc.tsv").exists(),
+        "a QC report under the project"
     );
 }
 
