@@ -416,15 +416,15 @@ impl Run {
         let prefix = prefix_of(path);
         let trained = crate::p2g::workflow::trained_run(&prefix)?;
         let links = table(&trained, LINKS);
-        let (s, n) = read_table_columns(
-            &links,
-            &["gene", "peak"],
-            &["distance", "abc", "gate", "corr", "score"],
-        )
-        .with_context(|| format!("reading {links}"))?;
-        let ([gene, peak], [distance, abc, gate, corr, score]) = (&s[..], &n[..]) else {
-            unreachable!("the columns asked for")
-        };
+        let crate::p2g::workflow::LinkColumns {
+            gene,
+            peak,
+            distance,
+            abc,
+            gate,
+            corr,
+            score,
+        } = crate::p2g::workflow::read_links(&links)?;
 
         // Genes by name; a run writes each gene's links together, but any
         // order is taken.
@@ -463,10 +463,10 @@ impl Run {
             gene_of,
             link_peak: Vec::with_capacity(order.len()),
             distance: order.iter().map(|&i| distance[i] as i64).collect(),
-            score: take(score),
-            gate: take(gate),
-            corr: take(corr),
-            abc: take(abc),
+            score: take(&score),
+            gate: take(&gate),
+            corr: take(&corr),
+            abc: take(&abc),
             peaks: Vec::new(),
             peak_of: FxHashMap::default(),
             place: Vec::new(),
