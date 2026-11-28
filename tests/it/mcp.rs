@@ -455,3 +455,39 @@ fn an_input_spelled_as_a_flag_is_pointed_to_its_argument() {
     let err = s.call("p2g_run", args).unwrap_err();
     assert!(err.contains("as `gene_coords`, not as a flag"), "{err}");
 }
+
+#[test]
+fn paths_given_as_flags_are_from_the_project_and_inputs_must_exist() {
+    let dir = tempfile::tempdir().unwrap();
+    let (rna, atac) = write_fixture(dir.path());
+    let genes = write_gene_coords(dir.path());
+    let mut s = Session::start(dir.path());
+    let base = json!({"rna": rna, "atac": atac, "gene_coords": genes});
+
+    // A file the run reads, by its value name (FILE), must be there.
+    let mut args = base.clone();
+    args["flags"] = json!({"covariate-genes": "no-such-sets.tsv"});
+    let err = s.call("p2g_run", args).unwrap_err();
+    assert!(
+        err.contains("--covariate-genes") && err.contains("no-such-sets.tsv"),
+        "{err}"
+    );
+    assert!(err.contains("does not exist"), "{err}");
+
+    // A file it writes goes from the project's root, not the server's
+    // working directory, also for the records' replay.
+    let mut args = base.clone();
+    let mut flags = small();
+    flags["qc-report"] = json!("qc.tsv");
+    args["flags"] = flags;
+    let ran = s.call("p2g_run", args).unwrap();
+    let report = dir.path().join("qc.tsv");
+    let command = ran["command"].as_str().unwrap();
+    assert!(
+        command.contains(&format!("--qc-report={}", report.display())),
+        "{command}"
+    );
+    let state = s.wait(ran["job"].as_str().unwrap());
+    assert_eq!(state["state"], "done", "{state}");
+    assert!(report.exists());
+}

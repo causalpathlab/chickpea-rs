@@ -680,3 +680,41 @@ mod tests {
         );
     }
 }
+
+/// A run's links as its `links` table has them, a row per pair.
+#[derive(Clone, Debug, Default)]
+pub struct LinkColumns {
+    pub gene: Vec<Box<str>>,
+    pub peak: Vec<Box<str>>,
+    pub distance: Vec<f64>,
+    pub abc: Vec<f64>,
+    pub gate: Vec<f64>,
+    pub corr: Vec<f64>,
+    pub score: Vec<f64>,
+}
+
+/// The links table at `links` (a trained run's `{prefix}.links.parquet`):
+/// its gene, peak, distance, abc, gate, corr and score columns.
+pub fn read_links(links: &str) -> anyhow::Result<LinkColumns> {
+    use anyhow::Context as _;
+    let (s, n) = legume_numeric::matrix::parquet::read_table_columns(
+        links,
+        &["gene", "peak"],
+        &["distance", "abc", "gate", "corr", "score"],
+    )
+    .with_context(|| format!("reading {links}"))?;
+    let (Ok([gene, peak]), Ok([distance, abc, gate, corr, score])) =
+        (<[_; 2]>::try_from(s), <[_; 5]>::try_from(n))
+    else {
+        unreachable!("the columns asked for")
+    };
+    Ok(LinkColumns {
+        gene,
+        peak,
+        distance,
+        abc,
+        gate,
+        corr,
+        score,
+    })
+}

@@ -1,18 +1,21 @@
 //! The run screen's state and keys: a step's count files (the data pane)
 //! and its other flags as a form, then its run.
 
-use super::data::{Data, SIDES};
+use super::data::{self, Data, SIDES};
 use super::pick::{Outcome, Pick, Want};
 use super::worker::{Ended, Job};
-use super::{checked, Step, STEPS};
-use crate::tui::{click, wheel, ListHit, TOOL};
+use super::{checked, checked_given, Step, STEPS};
+use crate::p2g::samples::Holds;
+use crate::tui::{wheel, ListHit, TOOL};
 use legume_mcp::job::{End, Reporter};
-use legume_tui::browse::{moved, shown};
+use legume_tui::browse::shown;
 use legume_tui::form::{Form, Kind, Many};
+use legume_tui::keys::{is_click_or_wheel, is_stray, list_move, wheel_key};
 use legume_tui::{is_run_key, Round};
-use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, MouseEvent};
+use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent};
 use std::cell::RefCell;
 use std::path::PathBuf;
+use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::time::Duration;
 
 /// How long a round waits for a key.
@@ -45,6 +48,12 @@ pub struct App {
     pub step: &'static Step,
     /// The data pane, for a step with count files.
     pub data: Option<Data>,
+    /// The files being told apart off the screen's thread (those whose
+    /// names do not say what they hold are opened), for the data pane.
+    reading: Option<Receiver<Vec<(PathBuf, Holds)>>>,
+    /// The step's flags as given after `--`, which run as they are: the
+    /// form then only shows them.
+    pub given: Option<Vec<String>>,
     pub form: Form,
     /// The row under the cursor.
     pub at: usize,
@@ -105,6 +114,8 @@ impl App {
         let mut app = Self {
             step,
             data,
+            reading: None,
+            given: None,
             form,
             at: 0,
             editing: None,
@@ -122,7 +133,18 @@ impl App {
         app
     }
 
-    /// The step's flags: the count files, then the form's.
+    /// The screen for `step` given whole after `--` with `argv` (its
+    /// flags): that line runs unchanged, checked as chickpea parses it and
+    /// its input files there, and the form shows it.
+    pub fn given(step: &'static Step, argv: &[String]) -> Self {
+        let mut app = Self::new(step, argv);
+        app.given = Some(argv.to_vec());
+        app.recheck();
+        app
+    }
+
+    /// The step's flags the screen stands for: the count files, then the
+    /// form's.
     #[must_use]
     pub fn argv(&self) -> Vec<String> {
         self.data
@@ -132,19 +154,83 @@ impl App {
             .collect()
     }
 
-    /// `chickpea` and the whole line the form stands for.
+    /// The line a run starts, as typed after `chickpea`: the step's name,
+    /// then its flags as given after `--`, else as the screen has them.
     #[must_use]
     pub fn command(&self) -> Vec<String> {
         std::iter::once(self.step.name.to_string())
-            .chain(self.argv())
+            .chain(self.given.clone().unwrap_or_else(|| self.argv()))
             .collect()
     }
 
+    /// Whether the form's `--data` is set: the count files given as a flag.
+    fn data_flag(&self) -> bool {
+        self.form
+            .fields
+            .iter()
+            .any(|f| &*f.long == "data" && !f.value.trim().is_empty())
+    }
+
     fn recheck(&mut self) {
-        self.check = match self.data.as_ref().and_then(Data::problem) {
-            Some(why) => Err(why),
-            None => checked(self.step, &self.argv()),
+        let by_flag = self.data_flag();
+        self.check = if let Some(argv) = &self.given {
+            checked_given(self.step, argv)
+        } else if self.reading.is_some() {
+            Err("reading the files chosen…".into())
+        } else {
+            match self.data.as_ref().and_then(|d| d.problem(by_flag)) {
+                Some(why) => Err(why),
+                None => checked(self.step, &self.argv()),
+            }
         };
+    }
+
+    /// What goes on between keys: the browser's listing, and the files
+    /// being told apart, folded into the data pane once they are.
+    pub fn tick(&mut self) {
+        if let Some(pick) = self.pick.as_mut() {
+            pick.tick();
+        }
+        let Some(rx) = &self.reading else { return };
+        let told = match rx.try_recv() {
+            Err(TryRecvError::Empty) => return,
+            Ok(told) => Some(told),
+            Err(TryRecvError::Disconnected) => None,
+        };
+        self.reading = None;
+        self.note = match (told, self.data.as_mut()) {
+            (Some(told), Some(d)) => Some(d.add_told(told)),
+            _ => Some("the files chosen could not be told apart".into()),
+        };
+        self.recheck();
+    }
+
+    /// Add `files` to the data pane: at once when their names say what
+    /// they hold, else read on a thread of their own, so the screen stays
+    /// live, and folded in by [`App::tick`].
+    fn add_files(&mut self, files: Vec<PathBuf>) {
+        let Some(d) = self.data.as_mut() else { return };
+        if self.reading.is_some() {
+            self.note = Some("still reading the files chosen before".into());
+            return;
+        }
+        if data::told_by_name(&files) {
+            self.note = Some(d.add(files));
+            return;
+        }
+        let (tx, rx) = mpsc::channel();
+        let spawned = std::thread::Builder::new()
+            .name("chickpea-read".into())
+            .spawn(move || {
+                let _ = tx.send(data::told(files));
+            });
+        self.note = Some(match spawned {
+            Ok(_) => {
+                self.reading = Some(rx);
+                "reading…".into()
+            }
+            Err(e) => format!("cannot read the files: {e}"),
+        });
     }
 
     /// Start the run the form stands for, unless the line is refused or it
@@ -153,12 +239,9 @@ impl App {
         self.recheck();
         self.note = match &self.check {
             Err(why) => Some(why.clone()),
-            Ok(made) => match made.iter().find(|p| p.exists()) {
-                Some(there) => Some(format!(
-                    "{} exists: a run is not written over; change --out",
-                    shown(there)
-                )),
-                None => match Job::start(self.command(), env) {
+            Ok(made) => match crate::mcp::not_over(made, "change --out") {
+                Err(e) => Some(format!("{e:#}")),
+                Ok(()) => match Job::start(self.command(), env) {
                     Ok(job) => {
                         self.job = Some(job);
                         self.pane = Pane::Run;
@@ -207,7 +290,7 @@ impl App {
             self.browse_dir = dir.to_path_buf();
         }
         match want {
-            Want::Data => self.note = self.data.as_mut().map(|d| d.add(files)),
+            Want::Data => self.add_files(files),
             Want::Cell => {
                 if let (Some(d), Some(f)) = (self.data.as_mut(), files.into_iter().next()) {
                     d.set(f);
@@ -242,7 +325,11 @@ impl App {
                 KeyCode::Backspace => {
                     text.pop();
                 }
-                KeyCode::Char(c) => text.push(c),
+                // Typed text: a character as it is, or shifted; not one
+                // held with Ctrl or Alt.
+                KeyCode::Char(c) if (k.modifiers - KeyModifiers::SHIFT).is_empty() => {
+                    text.push(c);
+                }
                 _ => {}
             }
             return;
@@ -251,6 +338,10 @@ impl App {
             if !self.running() {
                 self.start(env.clone());
             }
+            return;
+        }
+        // Ctrl+x is not x (which stops a run), nor Alt+q q.
+        if is_stray(&k) {
             return;
         }
         match k.code {
@@ -291,9 +382,12 @@ impl App {
         }
         let Some(d) = self.data.as_mut() else { return };
         let n = d.pairs.len();
+        // The rows, and the "add" row after them.
+        if let Some(at) = list_move(&k, d.at, n + 1, true) {
+            d.at = at;
+            return;
+        }
         match k.code {
-            KeyCode::Down | KeyCode::Char('j') => d.at = moved(d.at, 1, n),
-            KeyCode::Up | KeyCode::Char('k') => d.at = moved(d.at, -1, n),
             KeyCode::Left | KeyCode::Char('h') => d.col = d.col.saturating_sub(1),
             KeyCode::Right | KeyCode::Char('l') => d.col = (d.col + 1).min(SIDES.len() - 1),
             KeyCode::Char('a') | KeyCode::Char('+') => self.browse(Want::Data, None),
@@ -312,13 +406,12 @@ impl App {
     }
 
     fn form_key(&mut self, k: KeyEvent) {
-        let n = self.form.fields.len();
+        if let Some(at) = list_move(&k, self.at, self.form.fields.len(), true) {
+            self.at = at;
+            return;
+        }
         match k.code {
             KeyCode::Char('q') | KeyCode::Esc => self.quit_key(),
-            KeyCode::Down | KeyCode::Char('j') => self.at = moved(self.at, 1, n.saturating_sub(1)),
-            KeyCode::Up | KeyCode::Char('k') => self.at = moved(self.at, -1, n.saturating_sub(1)),
-            KeyCode::PageDown => self.at = moved(self.at, 10, n.saturating_sub(1)),
-            KeyCode::PageUp => self.at = moved(self.at, -10, n.saturating_sub(1)),
             KeyCode::Char('d') => {
                 self.form.fields[self.at].reset();
                 self.recheck();
@@ -376,18 +469,20 @@ impl App {
             KeyCode::End => self.scroll = 0,
             _ => {}
         }
+        // No further back than the oldest line kept.
+        let n = self.job.as_ref().map_or(0, |j| j.log().lines.len());
+        self.scroll = self.scroll.min(n.saturating_sub(1));
     }
 
     /// Take the mouse: the wheel scrolls what is under the cursor's pane,
     /// a click on a tab opens its pane, a click on a row puts the cursor
     /// there, and a click on the row it is on changes it, as enter does.
     pub fn mouse(&mut self, m: MouseEvent, env: &legume_tui::ChildEnv) {
-        let wheel = wheel(&m);
-        if wheel.is_none() && !click(&m) {
+        if !is_click_or_wheel(&m) {
             return;
         }
         if let Some(pick) = self.pick.as_mut() {
-            let out = match wheel {
+            let out = match wheel(&m) {
                 Some(d) => {
                     pick.scroll(d * 3);
                     Outcome::Open
@@ -399,12 +494,11 @@ impl App {
         if self.editing.is_some() {
             return;
         }
-        if let Some(d) = wheel {
+        if let Some(k) = wheel_key(&m) {
             // As the arrow keys, but the log three lines a turn.
-            let code = if d < 0 { KeyCode::Up } else { KeyCode::Down };
             let turns = if self.pane == Pane::Run { 3 } else { 1 };
             for _ in 0..turns {
-                self.key(KeyEvent::from(code), env);
+                self.key(k, env);
             }
             return;
         }
@@ -459,7 +553,11 @@ pub fn run(args: &super::RunArgs) -> anyhow::Result<()> {
     let reporter = given.then(Reporter::from_env).flatten();
     let session = TOOL.session("run", &args.session())?;
     let env = session.child_env();
-    let mut app = App::new(step, argv);
+    let mut app = if given {
+        App::given(step, argv)
+    } else {
+        App::new(step, argv)
+    };
     if given {
         app.start(env.clone());
         if app.job.is_none() {
@@ -495,9 +593,7 @@ pub fn run(args: &super::RunArgs) -> anyhow::Result<()> {
             {
                 return Ok(ended);
             }
-            if let Some(pick) = app.pick.as_mut() {
-                pick.tick();
-            }
+            app.tick();
             session.status(&status(&app));
             session.draw(terminal, |f| super::draw::draw(f, &app))?;
             match session.poll(terminal, TICK)? {
@@ -656,6 +752,134 @@ mod tests {
             argv.iter().filter(|a| *a == "--atac").count(),
             1,
             "{argv:?}"
+        );
+    }
+
+    fn words(ws: &[&str]) -> Vec<String> {
+        ws.iter().map(|w| w.to_string()).collect()
+    }
+
+    #[test]
+    fn a_step_given_after_dashes_runs_as_given() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = |name: &str| {
+            let p = dir.path().join(name);
+            std::fs::write(&p, "x").unwrap();
+            p.to_string_lossy().into_owned()
+        };
+        let (a, b, g) = (file("a.h5"), file("b.h5"), file("g.tsv"));
+        let out = dir.path().join("out").to_string_lossy().into_owned();
+        // --data (not the data pane's --rna and --atac) and a hidden flag,
+        // which the form has no row for.
+        let argv = words(&[
+            "--data",
+            &a,
+            &b,
+            "--gene-coords",
+            &g,
+            "--qc-min-counts",
+            "7",
+            "-o",
+            &out,
+        ]);
+        let app = App::given(&STEPS[0], &argv);
+        assert!(app.check.is_ok(), "{:?}", app.check);
+        assert_eq!(app.command()[0], "peak-to-gene");
+        assert_eq!(app.command()[1..], argv[..]);
+
+        // Its inputs must be there.
+        let mut gone = argv.clone();
+        gone[2] = dir.path().join("no.h5").to_string_lossy().into_owned();
+        let app = App::given(&STEPS[0], &gone);
+        let why = app.check.unwrap_err();
+        assert!(
+            why.contains("no.h5") && why.contains("does not exist"),
+            "{why}"
+        );
+    }
+
+    #[test]
+    fn the_form_runs_with_data_set_as_a_flag() {
+        let mut app = App::new(&STEPS[0], &[]);
+        assert!(app.check.is_err());
+        for (long, value) in [
+            ("data", "a.h5 b.h5"),
+            ("gene-coords", "g.tsv"),
+            ("out", "o"),
+        ] {
+            app.form.get_mut(long).unwrap().set_text(value);
+        }
+        app.recheck();
+        assert!(app.check.is_ok(), "{:?}", app.check);
+        assert!(app.command().contains(&"--data".to_string()));
+    }
+
+    #[test]
+    fn keys_held_with_ctrl_or_alt_are_not_plain_keys() {
+        let mut app = App::new(super::super::step("regroup").unwrap(), &[]);
+        let env = legume_tui::ChildEnv::default();
+        app.key(
+            KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL),
+            &env,
+        );
+        app.key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::ALT), &env);
+        assert!(!app.quit);
+
+        // Typed text takes plain and shifted characters only.
+        let at = app
+            .form
+            .fields
+            .iter()
+            .position(|f| &*f.long == "block-size")
+            .unwrap();
+        app.at = at;
+        key(&mut app, KeyCode::Char('e'));
+        app.editing = Some(String::new());
+        app.key(
+            KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL),
+            &env,
+        );
+        app.key(KeyEvent::new(KeyCode::Char('B'), KeyModifiers::SHIFT), &env);
+        key(&mut app, KeyCode::Char('c'));
+        assert_eq!(app.editing.as_deref(), Some("Bc"));
+
+        app.editing = None;
+        key(&mut app, KeyCode::Char('q'));
+        assert!(app.quit);
+    }
+
+    #[test]
+    fn the_log_scrolls_no_further_back_than_it_goes() {
+        let mut app = App::new(&STEPS[0], &[]);
+        app.run_key(KeyEvent::from(KeyCode::PageUp));
+        assert_eq!(app.scroll, 0);
+    }
+
+    #[test]
+    fn files_whose_names_do_not_say_are_read_off_the_screen() {
+        let dir = tempfile::tempdir().unwrap();
+        let files: Vec<PathBuf> = ["x.h5", "y.h5"].map(|f| dir.path().join(f)).into();
+        for f in &files {
+            std::fs::write(f, "x").unwrap();
+        }
+        let mut app = App::new(&STEPS[0], &[]);
+        app.chosen(Want::Data, files);
+        assert_eq!(app.note.as_deref(), Some("reading…"));
+        assert!(app.check.is_err());
+        for _ in 0..500 {
+            if app.reading.is_none() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+            app.tick();
+        }
+        assert!(app.reading.is_none());
+        // Unreadable, both are taken as RNA.
+        assert_eq!(app.data.as_ref().unwrap().pairs.len(), 2);
+        assert!(
+            app.note.as_deref().unwrap().contains("2 RNA"),
+            "{:?}",
+            app.note
         );
     }
 }

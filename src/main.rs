@@ -86,7 +86,7 @@ enum Commands {
                       `chickpea view {out}` looks at them; `chickpea regroup` redoes\n\
                       the groups.",
         after_long_help = ENV_HELP,
-        aliases = ["p2g", "peak2gene"]
+        aliases = mcp::P2G_ALIASES
     )]
     PeakToGene(Box<p2g::PeakToGeneArgs>),
 

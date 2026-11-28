@@ -101,13 +101,23 @@ impl Data {
             .collect()
     }
 
-    /// Why the rows cannot run yet: no files, or a sample without one.
+    /// Why the rows cannot run yet: no files (unless `by_flag`, the count
+    /// files given in any order as the form's `--data`), or a sample
+    /// without one.
     #[must_use]
-    pub fn problem(&self) -> Option<String> {
-        if self.pairs.is_empty() {
+    pub fn problem(&self, by_flag: bool) -> Option<String> {
+        if self.pairs.is_empty() && !by_flag {
             let what: Vec<&str> = SIDES.iter().map(|s| s.title()).collect();
-            return Some(format!("add the {} files (a)", what.join(" and ")));
+            return Some(format!(
+                "add the {} files (a), or set --data",
+                what.join(" and ")
+            ));
         }
+        self.gap()
+    }
+
+    /// A sample without one of its files.
+    fn gap(&self) -> Option<String> {
         self.pairs.iter().enumerate().find_map(|(i, p)| {
             let missing = SIDES.iter().find(|&&s| p.get(s).is_none())?;
             Some(format!("sample {} has no {} file", i + 1, missing.title()))
@@ -119,7 +129,7 @@ impl Data {
     #[must_use]
     pub fn names(&self) -> Vec<Option<String>> {
         let none = vec![None; self.pairs.len()];
-        if self.problem().is_some() {
+        if self.pairs.is_empty() || self.gap().is_some() {
             return none;
         }
         let list = |s: Side| -> Vec<Box<str>> {
@@ -155,12 +165,20 @@ impl Data {
     /// of both is a row by itself), gaps in the rows filled first, then the
     /// rest paired by the words of their names. Says what it did.
     pub fn add(&mut self, files: Vec<PathBuf>) -> String {
+        self.add_told(told(files))
+    }
+
+    /// [`Data::add`] for files already told apart ([`told`]).
+    pub fn add_told(&mut self, files: Vec<(PathBuf, Holds)>) -> String {
         let have: Vec<&PathBuf> = self.pairs.iter().flat_map(Pair::files).collect();
-        let files: Vec<PathBuf> = files.into_iter().filter(|f| !have.contains(&f)).collect();
+        let files: Vec<(PathBuf, Holds)> = files
+            .into_iter()
+            .filter(|(f, _)| !have.contains(&f))
+            .collect();
         let mut pools: [Vec<PathBuf>; 2] = [Vec::new(), Vec::new()];
         let mut both = 0;
-        for f in files {
-            match holds(&f) {
+        for (f, holds) in files {
+            match holds {
                 Holds::Rna => pools[0].push(f),
                 Holds::Atac => pools[1].push(f),
                 Holds::Both => {
@@ -204,6 +222,28 @@ fn names(paths: &[PathBuf]) -> Vec<std::borrow::Cow<'_, str>> {
     paths.iter().map(|p| p.to_string_lossy()).collect()
 }
 
+/// Each of `files` with what it holds ([`holds`]): slow for a file whose
+/// name does not say, which is opened.
+#[must_use]
+pub fn told(files: Vec<PathBuf>) -> Vec<(PathBuf, Holds)> {
+    files
+        .into_iter()
+        .map(|f| {
+            let h = holds(&f);
+            (f, h)
+        })
+        .collect()
+}
+
+/// Whether the names of all `files` say what they hold, so telling them
+/// apart opens none.
+#[must_use]
+pub fn told_by_name(files: &[PathBuf]) -> bool {
+    files
+        .iter()
+        .all(|f| samples::holds_by_name(&f.to_string_lossy()).is_some())
+}
+
 /// What a file holds: by its name when that says, else by its rows (a
 /// file that cannot be read is taken as RNA, and the run says why).
 fn holds(path: &Path) -> Holds {
@@ -237,7 +277,7 @@ mod tests {
                 Pair([Some(p("s2.gex.h5")), Some(p("s2.atac.zarr.zip"))]),
             ]
         );
-        assert_eq!(d.problem(), None);
+        assert_eq!(d.problem(false), None);
         assert_eq!(
             d.argv(),
             [
@@ -274,10 +314,10 @@ mod tests {
     fn a_missing_side_is_filled_by_the_next_files() {
         let mut d = Data::default();
         d.add(vec![p("s1_rna.h5")]);
-        assert!(d.problem().unwrap().contains("no ATAC"));
+        assert!(d.problem(false).unwrap().contains("no ATAC"));
         d.add(vec![p("s1_atac.h5")]);
         assert_eq!(d.pairs.len(), 1);
-        assert_eq!(d.problem(), None);
+        assert_eq!(d.problem(false), None);
         assert_eq!(d.names(), [None], "one sample keeps its barcodes");
     }
 }

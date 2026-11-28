@@ -12,14 +12,16 @@ pub mod draw;
 pub mod pick;
 pub mod worker;
 
-use crate::p2g::{PeakToGeneArgs, RegroupArgs};
-use clap::{Args, FromArgMatches};
+use crate::mcp;
+use clap::Args;
 use std::path::PathBuf;
 
 /// A step `chickpea run` sets up: its subcommand and what it writes.
 pub struct Step {
     /// The subcommand, as typed after `chickpea`.
     pub name: &'static str,
+    /// Its other names on the command line.
+    pub aliases: &'static [&'static str],
     /// What it does, in a line.
     pub about: &'static str,
     /// Its command line, built, named after the subcommand.
@@ -37,29 +39,19 @@ pub struct Step {
 pub const STEPS: &[Step] = &[
     Step {
         name: "peak-to-gene",
+        aliases: &mcp::P2G_ALIASES,
         about: "Link cis peaks to genes over a multiome embedding",
-        command: || {
-            let mut cmd = PeakToGeneArgs::augment_args(clap::Command::new("peak-to-gene"));
-            cmd.build();
-            cmd
-        },
-        outputs: |m| {
-            let args = PeakToGeneArgs::from_arg_matches(m)?;
-            args.check_pairs()?;
-            Ok(args.outputs())
-        },
+        command: || mcp::p2g_command("peak-to-gene"),
+        outputs: mcp::p2g_outputs,
         inputs: &["gene-coords", "gff-file", "batch", "groups", "out"],
         data: true,
     },
     Step {
         name: "regroup",
+        aliases: &[],
         about: "A finished run's per-group tables again, for other cell groups",
-        command: || {
-            let mut cmd = RegroupArgs::augment_args(clap::Command::new("regroup"));
-            cmd.build();
-            cmd
-        },
-        outputs: |m| Ok(RegroupArgs::from_arg_matches(m)?.outputs()),
+        command: || mcp::regroup_command("regroup"),
+        outputs: mcp::regroup_outputs,
         inputs: &["run", "groups", "atac", "out"],
         data: false,
     },
@@ -67,24 +59,37 @@ pub const STEPS: &[Step] = &[
 
 /// The step named `name` (a subcommand or one of its aliases).
 pub fn step(name: &str) -> anyhow::Result<&'static Step> {
-    let alias = match name {
-        "p2g" | "peak2gene" => "peak-to-gene",
-        n => n,
-    };
-    STEPS.iter().find(|s| s.name == alias).ok_or_else(|| {
-        let names: Vec<&str> = STEPS.iter().map(|s| s.name).collect();
-        anyhow::anyhow!("no step {name:?}: one of {}", names.join(", "))
-    })
+    STEPS
+        .iter()
+        .find(|s| s.name == name || s.aliases.contains(&name))
+        .ok_or_else(|| {
+            let names: Vec<&str> = STEPS.iter().map(|s| s.name).collect();
+            anyhow::anyhow!("no step {name:?}: one of {}", names.join(", "))
+        })
 }
 
 /// What `step` with `argv` (its flags, after the subcommand) would write,
 /// checked as chickpea parses it; clap's complaint, on one line, if it
 /// refuses the line.
 pub fn checked(step: &Step, argv: &[String]) -> Result<Vec<PathBuf>, String> {
+    check_line(step, argv, false)
+}
+
+/// [`checked`] for a line given whole after `--`, which runs as it is:
+/// the files it reads must be there too.
+pub fn checked_given(step: &Step, argv: &[String]) -> Result<Vec<PathBuf>, String> {
+    check_line(step, argv, true)
+}
+
+fn check_line(step: &Step, argv: &[String], inputs: bool) -> Result<Vec<PathBuf>, String> {
     let line: Vec<String> = std::iter::once(step.name.to_string())
         .chain(argv.iter().cloned())
         .collect();
-    let m = legume_tui::form::parse(&(step.command)(), &line)?;
+    let cmd = (step.command)();
+    let m = legume_tui::form::parse(&cmd, &line)?;
+    if let Some(why) = inputs.then(|| mcp::missing_input(&cmd, &m)).flatten() {
+        return Err(why);
+    }
     (step.outputs)(&m).map_err(|e| format!("{e:#}"))
 }
 
