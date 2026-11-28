@@ -478,7 +478,7 @@ pub fn render_genome(
     }
     // The best genes in sight with something to show, listed whole while
     // they fit.
-    let best = genome.best_in_view(view);
+    let best = super::data::Genome::best_first(&in_sight);
     let mut list = String::from("top:");
     for p in best.iter().take(LISTED) {
         let entry = format!("{} {}", names[p.0], num(p.2));

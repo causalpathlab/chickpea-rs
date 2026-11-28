@@ -97,8 +97,9 @@ pub fn draw_genome(
     let xs = |t: f32| x0 + (t - from) / span * (x1 - x0);
     let seen = |t: f32| view.sees(t);
     // The axis spans the values in sight, as the text figure's does.
-    let (lo, top) = genome
-        .in_view(view)
+    let in_sight: Vec<&(usize, u64, f32)> = genome.in_view(view).collect();
+    let (lo, top) = in_sight
+        .iter()
         .fold((0f32, 0f32), |(lo, top), p| (lo.min(p.2), top.max(p.2)));
     let hi = if top > 0.0 { top * 1.08 } else { 1.0 };
     let ys = |v: f32| y1 - (v - lo) / (hi - lo) * (y1 - y0);
@@ -203,7 +204,7 @@ pub fn draw_genome(
             label(frame, bold, &names[g], x, y, to_linear(ARC), &mut taken);
         }
     }
-    let best = genome.best_in_view(view);
+    let best = Genome::best_first(&in_sight);
     let mut named = 0;
     for &&(g, pos, v) in best
         .iter()

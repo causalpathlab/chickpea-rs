@@ -183,10 +183,11 @@ impl Genome {
             .filter(move |p| view.sees(p.1 as f32 / len))
     }
 
-    /// The points in sight of `view` with a value above 0, best first.
+    /// Of `in_sight` (as [`Genome::in_view`] gives them), those with a
+    /// value above 0, best first.
     #[must_use]
-    pub fn best_in_view(&self, view: &super::figure::GenomeView) -> Vec<&(usize, u64, f32)> {
-        let mut best: Vec<_> = self.in_view(view).filter(|p| p.2 > 0.0).collect();
+    pub fn best_first<'a>(in_sight: &[&'a (usize, u64, f32)]) -> Vec<&'a (usize, u64, f32)> {
+        let mut best: Vec<_> = in_sight.iter().copied().filter(|p| p.2 > 0.0).collect();
         best.sort_by(|a, b| b.2.total_cmp(&a.2));
         best
     }
