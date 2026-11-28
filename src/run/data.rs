@@ -155,7 +155,22 @@ impl Data {
     /// of both is a row by itself), gaps in the rows filled first, then the
     /// rest paired by the words of their names. Says what it did.
     pub fn add(&mut self, files: Vec<PathBuf>) -> String {
-        self.add_told(told(files))
+        self.add_read(told(files))
+    }
+
+    /// [`Data::add_told`] for files read off the screen ([`Told`]): those
+    /// told apart taken, and why each other could not be read said after
+    /// what was done.
+    pub fn add_read(&mut self, files: Told) -> String {
+        let mut why: Vec<String> = Vec::new();
+        let told = files
+            .into_iter()
+            .filter_map(|(f, h)| h.map_err(|e| why.push(e)).ok().map(|h| (f, h)))
+            .collect();
+        std::iter::once(self.add_told(told))
+            .chain(why)
+            .collect::<Vec<_>>()
+            .join("; ")
     }
 
     /// [`Data::add`] for files already told apart ([`told`]).
@@ -212,33 +227,34 @@ fn names(paths: &[PathBuf]) -> Vec<std::borrow::Cow<'_, str>> {
     paths.iter().map(|p| p.to_string_lossy()).collect()
 }
 
+/// Files read off the screen: each with what it holds, or why it could
+/// not be told.
+pub type Told = Vec<(PathBuf, Result<Holds, String>)>;
+
 /// Each of `files` with what it holds ([`holds`]): slow for a file whose
 /// name does not say, which is opened.
 #[must_use]
-pub fn told(files: Vec<PathBuf>) -> Vec<(PathBuf, Holds)> {
+pub fn told(files: Vec<PathBuf>) -> Told {
     files
         .into_iter()
         .map(|f| {
             let h = holds(&f);
-            (f, h)
+            (f, Ok(h))
         })
         .collect()
 }
 
-/// Each of `files` with what it holds as the run tells `--data` apart:
-/// by its rows, so the rows they make pair as the run's samples would;
-/// by its name when it cannot be read (else as RNA, and the run says why).
-/// Slow: every file is opened.
+/// Each of `files` with what it holds as the run tells `--data` apart: by
+/// its rows, so the rows they make pair as the run's samples would. A file
+/// that cannot be read is not guessed at: why is its answer, as the run
+/// would refuse it. Slow: every file is opened.
 #[must_use]
-pub fn told_as_run(files: Vec<PathBuf>) -> Vec<(PathBuf, Holds)> {
+pub fn told_as_run(files: Vec<PathBuf>) -> Told {
     files
         .into_iter()
         .map(|f| {
             let p = f.to_string_lossy();
-            let h = samples::holds(&p)
-                .ok()
-                .or_else(|| samples::holds_by_name(&p))
-                .unwrap_or(Holds::Rna);
+            let h = samples::holds(&p).map_err(|e| format!("{p}: {e:#}"));
             (f, h)
         })
         .collect()

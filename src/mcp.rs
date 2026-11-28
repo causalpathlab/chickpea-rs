@@ -204,7 +204,9 @@ impl Server {
     }
 
     fn run(&self, a: RunArgs, cx: &Call) -> anyhow::Result<Value> {
-        // The flags first, so a misplaced input is named as such.
+        // The flags first, so a tool argument given among them (an input
+        // named there) is refused as misplaced; the files the line reads
+        // are checked once it is whole, in `checked_outputs`.
         let flags = absolute_flags(&self.cli, &a.flags, &OWN);
         let flags = to_argv(&self.cli, &flags, &OWN.map(|id| (id, id)), "p2g_flags")?;
         let positions = match (&a.gene_coords, &a.gff_file) {

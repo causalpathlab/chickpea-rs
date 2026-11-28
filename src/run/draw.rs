@@ -319,9 +319,16 @@ fn command(f: &mut Frame, app: &App, area: Rect, look: &Look) {
         }
         _ => {}
     }
-    let block = Block::default()
+    let mut block = Block::default()
         .borders(Borders::TOP)
         .border_style(look.border);
+    // A line given after `--` runs word for word until it is edited.
+    if app.as_given().is_some() {
+        block = block.title(Span::styled(
+            " the line given runs as given until something is changed ",
+            look.hint,
+        ));
+    }
     f.render_widget(
         Paragraph::new(text)
             .wrap(Wrap { trim: false })

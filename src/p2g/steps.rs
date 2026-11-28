@@ -123,14 +123,15 @@ pub fn is_path(hint: ValueHint, name: &str) -> bool {
     ) || matches!(name, "FILE" | "PATH" | "DIR")
 }
 
-/// Whether `arg` takes a path, as its declaration says ([`is_path`]).
+/// Whether `arg` takes a path, as its declaration says ([`is_path`]): by
+/// its hint, or by any of its value names.
 #[must_use]
 pub fn takes_path(arg: &Arg) -> bool {
-    let name = arg
-        .get_value_names()
-        .and_then(|ns| ns.first())
-        .map_or("", |n| n.as_str());
-    is_path(arg.get_value_hint(), name)
+    let hint = arg.get_value_hint();
+    match arg.get_value_names() {
+        Some(ns) if !ns.is_empty() => ns.iter().any(|n| is_path(hint, n.as_str())),
+        _ => is_path(hint, ""),
+    }
 }
 
 /// Whether `path` is there to read: a file or folder, or a run's prefix.
