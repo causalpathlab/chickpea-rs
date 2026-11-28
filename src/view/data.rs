@@ -29,6 +29,13 @@ pub enum Measure {
 impl Measure {
     pub const ALL: [Measure; 4] = [Measure::Score, Measure::Gate, Measure::Corr, Measure::Abc];
 
+    /// The measure after it in [`Measure::ALL`], round to the first.
+    #[must_use]
+    pub fn next(self) -> Self {
+        let i = Self::ALL.iter().position(|&m| m == self).unwrap_or(0);
+        Self::ALL[(i + 1) % Self::ALL.len()]
+    }
+
     /// What a locus figure's links show by it (each caller says whether it
     /// is a row's own: corr is not a share of anything).
     #[must_use]
@@ -68,6 +75,17 @@ pub enum Summary {
     Best,
     /// Its links at or above a cutoff.
     Count(f32),
+}
+
+impl Summary {
+    /// In a few words: `best`, `links ≥ 0.1`.
+    #[must_use]
+    pub fn name(self) -> String {
+        match self {
+            Summary::Best => "best".into(),
+            Summary::Count(c) => format!("links ≥ {c}"),
+        }
+    }
 }
 
 /// A peak's place: chromosome, start and end.
@@ -150,6 +168,38 @@ impl Genome {
         self.chroms
             .partition_point(|(_, o, _)| *o <= pos)
             .saturating_sub(1)
+    }
+
+    /// Each point in sight of `view`.
+    pub fn in_view<'a>(
+        &'a self,
+        view: &super::figure::GenomeView,
+    ) -> impl Iterator<Item = &'a (usize, u64, f32)> {
+        let len = self.len().max(1) as f32;
+        let (from, span) = view.window();
+        self.points.iter().filter(move |p| {
+            let t = p.1 as f32 / len;
+            t >= from && t <= from + span
+        })
+    }
+
+    /// The points in sight of `view` with a value above 0, best first.
+    #[must_use]
+    pub fn best_in_view(&self, view: &super::figure::GenomeView) -> Vec<&(usize, u64, f32)> {
+        let mut best: Vec<_> = self.in_view(view).filter(|p| p.2 > 0.0).collect();
+        best.sort_by(|a, b| b.2.total_cmp(&a.2));
+        best
+    }
+
+    /// The place `t` (a fraction of the genome) is: its chromosome's name
+    /// and the bp along it. As the `end` of a window, the last base in
+    /// sight, not the first past it.
+    #[must_use]
+    pub fn place_at(&self, t: f32, end: bool) -> (&str, u64) {
+        let pos = (t.clamp(0.0, 1.0) * self.len() as f32) as u64;
+        let pos = pos.saturating_sub(u64::from(end));
+        let (name, off, _) = &self.chroms[self.chrom_at(pos)];
+        (name, pos.saturating_sub(*off))
     }
 
     /// The chromosome a window (`from`, `span`, as fractions of the genome)
@@ -603,8 +653,8 @@ impl Run {
     }
 
     /// Gene `g`'s locus by `m`: `half` bp each side of its TSS (by default
-    /// its farthest link and a tenth more), its links' values in all the
-    /// cells and in each cluster. In a row, a link's share is its weight
+    /// its farthest link and a tenth more, at least 20 kb; never under
+    /// 1 kb), its links' values in all the cells and in each cluster. In a row, a link's share is its weight
     /// (the gate, or the ABC prior for [`Measure::Abc`]) times its peak's
     /// accessibility there, over the gene's candidates (as
     /// `links_by_cluster` has it); [`Measure::Score`] is that share times the
@@ -652,7 +702,7 @@ impl Run {
                 .collect()
         });
 
-        let n_rows = 1 + self.rates.as_ref().map_or(0, |r| r.clusters.len());
+        let n_rows = self.n_rows();
         let rows = (0..n_rows)
             .map(|r| {
                 let (label, cells) = match r {
@@ -820,20 +870,32 @@ impl Run {
         if n.eq_ignore_ascii_case("all") || n.eq_ignore_ascii_case("all cells") {
             return Ok(0);
         }
-        if let Some(k) = self
+        let r = match self
             .cluster_names
             .iter()
             .position(|g| g.eq_ignore_ascii_case(n))
         {
-            return Ok(k + 1);
-        }
-        match n.parse::<usize>() {
-            Ok(r) if r <= self.cluster_names.len() => Ok(r),
-            _ => anyhow::bail!(
-                "no row {n:?}: all, or one of the groups ({})",
-                self.cluster_names.join(", ")
-            ),
-        }
+            Some(k) => k + 1,
+            None => match n.parse::<usize>() {
+                Ok(r) if r <= self.cluster_names.len() => r,
+                _ => anyhow::bail!(
+                    "no row {n:?}: all, or one of the groups ({})",
+                    self.cluster_names.join(", ")
+                ),
+            },
+        };
+        anyhow::ensure!(
+            r < self.n_rows(),
+            "no row {n:?}: this run kept no peak_rates, so a locus has only the row `all`"
+        );
+        Ok(r)
+    }
+
+    /// Rows in each locus: all the cells, then each group when the run kept
+    /// its peaks' accessibility.
+    #[must_use]
+    pub fn n_rows(&self) -> usize {
+        1 + self.rates.as_ref().map_or(0, |r| r.clusters.len())
     }
 
     /// Row `r`'s name, as [`Run::row_of`] reads it.

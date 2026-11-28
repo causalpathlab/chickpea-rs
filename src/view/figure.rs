@@ -116,7 +116,7 @@ impl Layout {
 /// What the figure shows beside the locus.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Style {
-    /// Links weaker than this share of the strongest one shown are left
+    /// Links weaker than this share of their row's strongest are left
     /// out.
     pub cutoff: f32,
     /// Positions (bp) marked with a dashed line, beside the TSS.
@@ -860,6 +860,13 @@ impl GenomeView {
         let span = self.span.clamp(1e-4, 1.0);
         (self.from.clamp(0.0, 1.0 - span), span)
     }
+
+    /// Whether `t` (a fraction of the genome) is in sight.
+    #[must_use]
+    pub fn sees(&self, t: f32) -> bool {
+        let (from, span) = self.window();
+        t >= from && t <= from + span
+    }
 }
 
 /// How a genome-wide figure's values read: `best score`, `links ≥ 0.1 by corr`.
@@ -912,19 +919,11 @@ pub fn draw_genome(
     let (from, span) = view.window();
     let len = genome.len().max(1) as f32;
     let xs = |t: f32| x0 + (t - from) / span * (x1 - x0);
-    let seen = |t: f32| t >= from && t <= from + span;
-    let top = genome
-        .points
-        .iter()
-        .filter(|p| seen(p.1 as f32 / len))
-        .map(|p| p.2)
-        .fold(0f32, f32::max);
-    let lo = genome
-        .points
-        .iter()
-        .map(|p| p.2)
-        .fold(0f32, f32::min)
-        .min(0.0);
+    let seen = |t: f32| view.sees(t);
+    // The axis spans the values in sight, as the text figure's does.
+    let (lo, top) = genome
+        .in_view(view)
+        .fold((0f32, 0f32), |(lo, top), p| (lo.min(p.2), top.max(p.2)));
     let hi = if top > 0.0 { top * 1.08 } else { 1.0 };
     let ys = |v: f32| y1 - (v - lo) / (hi - lo) * (y1 - y0);
 
@@ -1028,14 +1027,13 @@ pub fn draw_genome(
             label(frame, bold, &names[g], x, y, to_linear(ARC), &mut taken);
         }
     }
-    let mut best: Vec<&(usize, u64, f32)> = genome
-        .points
-        .iter()
-        .filter(|p| seen(p.1 as f32 / len) && Some(p.0) != view.focus && p.2 > 0.0)
-        .collect();
-    best.sort_by(|a, b| b.2.total_cmp(&a.2));
+    let best = genome.best_in_view(view);
     let mut named = 0;
-    for &&(g, pos, v) in best.iter().take(NAMED * 3) {
+    for &&(g, pos, v) in best
+        .iter()
+        .filter(|p| Some(p.0) != view.focus)
+        .take(NAMED * 3)
+    {
         if named >= NAMED {
             break;
         }
@@ -1055,14 +1053,11 @@ pub fn draw_genome(
     if span < 0.999 {
         // On the chromosomes it covers: `17: 0 bp - 131 kb`, or across
         // several, `3: 10 Mb - 5: 2 Mb`.
-        let at = |t: f32| {
-            // The last base in sight, not the first past it.
-            let pos = ((genome.len() as f32 * t) as u64).saturating_sub(u64::from(t > from));
-            let k = chrom_of(pos);
-            let (name, off, _) = &genome.chroms[k];
-            (name, bp_text((pos - off) as f32))
+        let at = |t: f32, end: bool| {
+            let (name, bp) = genome.place_at(t, end);
+            (name, bp_text(bp as f32))
         };
-        let ((ca, a), (cb, b)) = (at(from), at(from + span));
+        let ((ca, a), (cb, b)) = (at(from, false), at(from + span, true));
         let s = if ca == cb {
             format!("{ca}: {a} - {b}")
         } else {

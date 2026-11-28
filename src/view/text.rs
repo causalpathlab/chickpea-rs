@@ -351,14 +351,9 @@ pub fn render_genome(
     let h = (area.height - 4) as usize;
     let (from, span) = view.window();
     let len = genome.len().max(1) as f32;
-    let seen = |t: f32| t >= from && t <= from + span;
     // A place's dot column, and a value's dot row (0 at the top).
     let dx = |t: f32| ((t - from) / span * (2 * w - 1) as f32).round();
-    let in_sight: Vec<&(usize, u64, f32)> = genome
-        .points
-        .iter()
-        .filter(|p| seen(p.1 as f32 / len))
-        .collect();
+    let in_sight: Vec<&(usize, u64, f32)> = genome.in_view(view).collect();
     let hi = in_sight
         .iter()
         .map(|p| p.2)
@@ -483,8 +478,7 @@ pub fn render_genome(
     }
     // The best genes in sight with something to show, listed whole while
     // they fit.
-    let mut best: Vec<&&(usize, u64, f32)> = in_sight.iter().filter(|p| p.2 > 0.0).collect();
-    best.sort_by(|a, b| b.2.total_cmp(&a.2));
+    let best = genome.best_in_view(view);
     let mut list = String::from("top:");
     for p in best.iter().take(LISTED) {
         let entry = format!("{} {}", names[p.0], num(p.2));

@@ -75,14 +75,8 @@ impl Viewer {
         let genome = state.genome();
         let run = &state.run;
         let (from, span) = state.settings.genome_view.window();
-        let len = genome.len().max(1) as f32;
         let in_sight: rustc_hash::FxHashSet<usize> = genome
-            .points
-            .iter()
-            .filter(|p| {
-                let t = p.1 as f32 / len;
-                t >= from && t <= from + span
-            })
+            .in_view(&state.settings.genome_view)
             .map(|p| p.0)
             .collect();
         let ranked = run.ranked(state.settings.measure, state.settings.summary);
@@ -106,7 +100,7 @@ impl Viewer {
         let reply = json!({
             "run": run.prefix,
             "measure": state.settings.measure.name(),
-            "summary": summary_name(state.settings.summary),
+            "summary": state.settings.summary.name(),
             "shown": shown_part(&genome, from, span),
             "genes": genes,
             "settings": settings(state),
@@ -359,16 +353,14 @@ fn shown_part(genome: &super::data::Genome, from: f32, span: f32) -> String {
     if let Some(name) = genome.whole_chrom(from, span) {
         return format!("chromosome {name} ({:.1}% of the genome)", span * 100.0);
     }
-    let len = genome.len().max(1) as f32;
-    let at = |t: f32| {
-        let pos = (t.clamp(0.0, 1.0) * len) as u64;
-        let (name, off, _) = &genome.chroms[genome.chrom_at(pos)];
-        format!("{name}:{}", super::figure::bp_text((pos - off) as f32))
+    let at = |t: f32, end: bool| {
+        let (name, bp) = genome.place_at(t, end);
+        format!("{name}:{}", super::figure::bp_text(bp as f32))
     };
     format!(
         "{} to {} ({:.1}% of the genome)",
-        at(from),
-        at(from + span),
+        at(from, false),
+        at(from + span, true),
         span * 100.0
     )
 }
@@ -389,7 +381,7 @@ fn settings(state: &State) -> Value {
     };
     json!({
         "measure": state.settings.measure.name(),
-        "summary": summary_name(state.settings.summary),
+        "summary": state.settings.summary.name(),
         "gene": state.settings.gene.map(|g| state.run.genes[g].to_string()),
         "half_window": state.settings.half_window.map_or_else(|| Value::from("the farthest link"), Value::from),
         "cutoff": state.settings.style.cutoff,
@@ -433,13 +425,6 @@ fn all_or_nothing(
         state.settings = before;
     }
     done
-}
-
-fn summary_name(s: Summary) -> String {
-    match s {
-        Summary::Best => "best".into(),
-        Summary::Count(c) => format!("count ≥ {c}"),
-    }
 }
 
 /// A number JSON can carry: NaN as null.
@@ -553,8 +538,8 @@ pub fn specs() -> Vec<ToolSpec> {
                 "properties": {
                     "gene": {"type": "string", "description": "The gene, as the run names it"},
                     "measure": measure,
-                    "half_window": {"type": "integer", "minimum": 0, "description": "bp each side of the TSS; 0: the gene's farthest link [default]"},
-                    "cutoff": {"type": "number", "minimum": 0, "maximum": 1, "description": "Leave out links weaker than this share of the strongest shown [default: 0.05]"},
+                    "half_window": {"type": "integer", "minimum": 0, "description": "bp each side of the TSS, at least 1000; 0: the gene's farthest link and a tenth more, at least 20 kb [default]"},
+                    "cutoff": {"type": "number", "minimum": 0, "maximum": 1, "description": "Leave out links weaker than this share of their row's strongest [default: 0.05]"},
                     "layout": {"enum": super::figure::Layout::names(), "description": "How the picture draws the links: arcs from the gene's TSS, or straight lines from the peaks to the TSS, a bipartite graph [default: arcs]"},
                     "marks": {"type": "array", "items": {"type": "integer"}, "description": "Positions (bp) marked with a dashed line; [] for none"},
                     "rows": {"type": "array", "items": {"type": ["string", "integer"]}, "description": "Rows to show: \"all\" (all the cells) and groups by name (as view_open lists them: C0, … or the run's cell types), or by number as view_locus lists them (0 all, 1 the first group); [] for all"},

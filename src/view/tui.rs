@@ -2,10 +2,10 @@
 //! the chosen gene's locus, or (tab) the genome-wide view with that gene
 //! ringed.
 
-use super::data::{Measure, Summary};
+use super::data::Summary;
 use super::State;
 use crate::tui::{click, key_line, wheel, ListHit, TOOL};
-use legume_tui::browse::{moved, shown};
+use legume_tui::browse::shown;
 use legume_tui::Look;
 use legume_tui::Round;
 use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, MouseEvent};
@@ -147,7 +147,7 @@ impl Screen {
             .gene
             .and_then(|f| g.points.iter().find(|p| p.0 == f))
             .map(|p| p.1 as f32 / len)
-            .filter(|t| *t >= from && *t <= from + span)
+            .filter(|&t| self.state.settings.genome_view.sees(t))
             .unwrap_or(from + span / 2.0);
         let span = (span * by).clamp(1e-4, 1.0);
         self.state.settings.genome_view.span = span;
@@ -218,18 +218,28 @@ impl Screen {
     }
 
     fn key(&mut self, k: KeyEvent) {
+        // Ctrl+S is no `s`, nor Ctrl+Q a `q`.
+        if legume_tui::keys::is_stray(&k) {
+            return;
+        }
         if let Some(text) = self.search.as_mut() {
             match k.code {
                 KeyCode::Enter => {
                     let text = std::mem::take(text);
                     self.search = None;
-                    match self.state.run.gene(text.trim()) {
-                        Some(g) => {
-                            self.at = self.ranked.iter().position(|&(i, _)| i == g).unwrap_or(0);
+                    // As the CLI and MCP find it, with the closest names when none.
+                    match self.state.set_gene(text.trim()) {
+                        Ok(()) => {
+                            let g = self.state.settings.gene;
+                            self.at = self
+                                .ranked
+                                .iter()
+                                .position(|&(i, _)| Some(i) == g)
+                                .unwrap_or(0);
                             self.follow();
                             self.note = None;
                         }
-                        None => self.note = Some(format!("{text}: no links")),
+                        Err(e) => self.note = Some(e.to_string()),
                     }
                 }
                 KeyCode::Esc => self.search = None,
@@ -241,22 +251,13 @@ impl Screen {
             }
             return;
         }
-        let n = self.ranked.len();
+        let moved = legume_tui::keys::list_step(&mut self.at, self.ranked.len(), &k, true);
         match k.code {
+            _ if moved => {}
             KeyCode::Char('q') | KeyCode::Esc => self.quit = true,
-            KeyCode::Down | KeyCode::Char('j') => self.at = moved(self.at, 1, n.saturating_sub(1)),
-            KeyCode::Up | KeyCode::Char('k') => self.at = moved(self.at, -1, n.saturating_sub(1)),
-            KeyCode::PageDown => self.at = moved(self.at, 20, n.saturating_sub(1)),
-            KeyCode::PageUp => self.at = moved(self.at, -20, n.saturating_sub(1)),
-            KeyCode::Home => self.at = 0,
             KeyCode::Char('/') => self.search = Some(String::new()),
             KeyCode::Char('m') => {
-                let all = Measure::ALL;
-                let i = all
-                    .iter()
-                    .position(|&m| m == self.state.settings.measure)
-                    .unwrap_or(0);
-                self.state.settings.measure = all[(i + 1) % all.len()];
+                self.state.settings.measure = self.state.settings.measure.next();
                 self.rank();
             }
             KeyCode::Char('f') => self.figure = !self.figure,
@@ -344,7 +345,8 @@ impl Screen {
             .state
             .settings
             .half_window
-            .or_else(|| self.state.locus().map(|l| (l.hi - l.lo) / 2))
+            // From the TSS: `lo` is clamped at the chromosome's start.
+            .or_else(|| self.state.locus().map(|l| l.hi - l.tss.tss))
             .unwrap_or(100_000);
         self.state.settings.half_window = Some(((now as f32 * by) as i64).clamp(1_000, 5_000_000));
     }
@@ -440,10 +442,7 @@ fn draw(f: &mut Frame, s: &mut Screen) {
     ])
     .areas(f.area());
     let run = &s.state.run;
-    let how = match s.state.settings.summary {
-        Summary::Best => "best".to_string(),
-        Summary::Count(c) => format!("links ≥ {c}"),
-    };
+    let how = s.state.settings.summary.name();
     let title = format!(
         "chickpea view · {}: {} genes, {} pairs · {} by {how}",
         run.prefix,
@@ -612,8 +611,9 @@ fn figure(f: &mut Frame, s: &mut Screen, area: Rect, look: &Look) {
         match drawn {
             Ok(p) => s.shown = Some((inner, key, p)),
             Err(e) => {
-                s.note = Some(format!("the figure: {e}"));
-                s.figure = false;
+                // As text from now on, so neither view retries every frame.
+                s.note = Some(format!("the figure: {e}; shown as text"));
+                s.text = true;
                 return;
             }
         }
