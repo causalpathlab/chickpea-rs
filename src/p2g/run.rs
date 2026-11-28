@@ -174,10 +174,13 @@ pub struct PeakToGeneArgs {
     #[arg(
         long,
         default_value_t = 10_000,
-        help = "ATAC peak modules",
-        long_help = "ATAC peak modules. Each peak's row is its module's row, so\n\
-                     this sets how finely peaks resolve; on the order of the\n\
-                     genes with their own rows keeps the two sides comparable."
+        help = "ATAC peak modules, when ATAC is module-only",
+        long_help = "ATAC peak modules, when ATAC is module-only (at least\n\
+                     --module-only-min-rows peaks). Then each peak's row is its\n\
+                     module's row, so this sets how finely peaks resolve; on the\n\
+                     order of the genes with their own rows keeps the two sides\n\
+                     comparable. With fewer peaks each keeps its own row and this\n\
+                     is unused."
     )]
     peak_modules: usize,
 
@@ -191,7 +194,10 @@ pub struct PeakToGeneArgs {
     #[arg(
         long,
         default_value_t = 100_000,
-        help = "ATAC modality is module-only when it has at least this many peaks (0 = off)"
+        help = "A modality is module-only when it has at least this many rows (0 = off)",
+        long_help = "A modality is module-only when it has at least this many rows:\n\
+                     each of its rows is its module's row. ATAC is, at this many\n\
+                     peaks; RNA too, at this many genes. 0 turns it off."
     )]
     module_only_min_rows: usize,
 
@@ -307,16 +313,25 @@ pub fn run_peak_to_gene(args: &PeakToGeneArgs) -> anyhow::Result<()> {
 
     let samples = args.samples()?;
     let gene_names = same_rows(&samples, Side::Rna)?;
-    same_rows(&samples, Side::Atac)?;
+    let peak_names = same_rows(&samples, Side::Atac)?;
     let positions = match (&args.gene_coords, &args.gff_file) {
         (Some(tsv), _) => load_gene_coords_tsv(tsv, &gene_names)?,
         (None, Some(gff)) => load_gene_tss(gff, &gene_names)?,
         (None, None) => unreachable!("clap requires --gene-coords or --gff-file"),
     };
+    let placed = positions.iter().filter(|p| p.is_some()).count();
     info!(
-        "Gene positions: {} of {} RNA genes placed",
-        positions.iter().filter(|p| p.is_some()).count(),
+        "Gene positions: {placed} of {} RNA genes placed",
         gene_names.len()
+    );
+    anyhow::ensure!(
+        placed > 0,
+        "none of the {} RNA genes has a position in {}: do the gene names match?",
+        gene_names.len(),
+        args.gene_coords
+            .as_deref()
+            .or(args.gff_file.as_deref())
+            .unwrap_or("the gene positions")
     );
 
     let keep: Option<FxHashSet<Box<str>>> = match args.qc.to_config() {
@@ -372,6 +387,8 @@ pub fn run_peak_to_gene(args: &PeakToGeneArgs) -> anyhow::Result<()> {
     };
     let input = TwoTrackInput {
         samples: &samples,
+        genes: &gene_names,
+        peaks: &peak_names,
         batch_file: args.batch.as_deref(),
         gene_positions: &positions,
         kernel: &kernel,

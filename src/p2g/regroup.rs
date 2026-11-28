@@ -236,6 +236,7 @@ fn read_pairs(
         peak: Vec::with_capacity(rows.len()),
         dist: Vec::with_capacity(rows.len()),
         weight: Vec::with_capacity(rows.len()),
+        // The build's counts: regroup reads none of them.
         n_genes_placed: 0,
         n_unparsed_peaks: 0,
         n_unreached_peaks: 0,
@@ -247,9 +248,6 @@ fn read_pairs(
         pairs.weight.push(abc[i] as f32);
         gates.push(gate[i] as f32);
     }
-    pairs.n_genes_placed = (0..genes.len())
-        .filter(|&g| !pairs.gene(g).is_empty())
-        .count();
     Ok((pairs, gates))
 }
 

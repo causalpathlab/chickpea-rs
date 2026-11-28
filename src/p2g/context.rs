@@ -31,15 +31,16 @@ pub fn for_each_context_share(
     );
     let n_clusters = lambda.ncols();
     let n_peaks = lambda.nrows();
+    if let Some(&p) = pairs.peak.iter().max() {
+        anyhow::ensure!((p as usize) < n_peaks, "peak {p} out of range ({n_peaks})");
+    }
     let share = |w: f32, total: f32| if total > 0.0 { w / total } else { 0.0 };
     for g in 0..pairs.n_genes() {
         let r = pairs.gene(g);
         for j in 0..n_clusters {
             let (mut tot_g, mut tot_a) = (0f32, 0f32);
             for k in r.clone() {
-                let p = pairs.peak[k] as usize;
-                anyhow::ensure!(p < n_peaks, "peak {p} out of range ({n_peaks})");
-                let lam = lambda[(p, j)];
+                let lam = lambda[(pairs.peak[k] as usize, j)];
                 tot_g += gate_w[k] * lam;
                 tot_a += pairs.weight[k] * lam;
             }

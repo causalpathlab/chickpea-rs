@@ -9,7 +9,9 @@
 //!   passed QC;
 //! - `groups`: `cluster`, `group`, `cells`: the groups, chickpea's own Leiden
 //!   clusters (`C0`, `C1`, …) or those given with `--groups`;
-//! - `peak_embedding`: each peak's ATAC-module row `μ_{m(p)}`;
+//! - `peak_embedding`: each peak's row: its ATAC module's `μ_{m(p)}` when
+//!   ATAC is module-only (at least `--module-only-min-rows` peaks), else its
+//!   own;
 //! - `peaks`: `peak`, `chromosome`, `start`, `end`;
 //! - `genes`: `gene`, `chromosome`, `tss` of every gene with a position;
 //! - `peak_rates`: `peak`, then each peak's accessibility (its reads over
@@ -216,11 +218,10 @@ pub fn run_links(
     let emb = embed_two_track(input, &cfg.embed)?;
 
     let kept: Vec<usize> = match keep {
+        // `keep` names cells as the run tags them (`Sample::cell`), as
+        // the embedding does.
         Some(set) => (0..emb.barcodes.len())
-            .filter(|&c| {
-                let b = emb.barcodes[c].as_ref();
-                set.contains(b) || b.split_once('@').is_some_and(|(raw, _)| set.contains(raw))
-            })
+            .filter(|&c| set.contains(&emb.barcodes[c]))
             .collect(),
         None => (0..emb.barcodes.len()).collect(),
     };
@@ -275,7 +276,7 @@ pub fn run_links(
     )?;
 
     Ok(LinkSummary {
-        n_genes: emb.rna_genes.len(),
+        n_genes: emb.genes.len(),
         n_peaks: emb.peak_names.len(),
         n_pairs: emb.pairs.n_pairs(),
         n_clusters,
@@ -567,7 +568,7 @@ fn write_links(out: &str, emb: &TwoTrackEmbedding, w: &[f32]) -> anyhow::Result<
     let gene_idx = gene_of_pair(pairs);
     let gene: Vec<Box<str>> = gene_idx
         .iter()
-        .map(|&g| emb.rna_genes[g as usize].clone())
+        .map(|&g| emb.genes[g as usize].clone())
         .collect();
     let peak: Vec<Box<str>> = pairs
         .peak

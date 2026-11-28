@@ -7,7 +7,8 @@
 //! the model. Every loaded cell is binned, QC-failed ones too: they are in
 //! the fit, and so in its δ.
 
-use super::two_track::RNA_TAG;
+use super::samples::Side;
+use super::two_track::modality_of;
 use crate::common::*;
 use data_beans::alg::random_projection::RandProjOps;
 use data_beans::bipartite_graph_embedding_input::BipartiteEmbeddingCells;
@@ -49,7 +50,7 @@ pub fn rna_rows(names: &[Box<str>]) -> Vec<usize> {
     names
         .iter()
         .enumerate()
-        .filter(|(_, n)| n.rsplit_once('/').is_some_and(|(_, tag)| tag == RNA_TAG))
+        .filter(|(_, n)| modality_of(n).is_some_and(|(_, side)| side == Side::Rna))
         .map(|(r, _)| r)
         .collect()
 }

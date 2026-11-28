@@ -44,6 +44,8 @@ pub fn small_config() -> TwoTrackConfig {
 /// positions, [`kernel`], and the output prefix `{dir}/run`.
 pub struct Fixture {
     samples: Vec<Sample>,
+    /// The RNA and ATAC rows, as the samples have them.
+    rows: [Vec<Box<str>>; 2],
     genes: Vec<Option<GeneTss>>,
     kernel: AbcKernel,
     pub work: String,
@@ -57,9 +59,12 @@ impl Fixture {
         (rna, atac): (String, String),
         genes: Vec<Option<GeneTss>>,
     ) -> Self {
-        let samples = chickpea::p2g::samples::pair(&[rna.into()], &[atac.into()]).unwrap();
+        use chickpea::p2g::samples::{pair, same_rows, Side};
+        let samples = pair(&[rna.into()], &[atac.into()]).unwrap();
+        let rows = [Side::Rna, Side::Atac].map(|side| same_rows(&samples, side).unwrap());
         Self {
             samples,
+            rows,
             genes,
             kernel: kernel(),
             work: dir.join("run").to_string_lossy().into_owned(),
@@ -69,6 +74,8 @@ impl Fixture {
     pub fn input(&self) -> TwoTrackInput<'_> {
         TwoTrackInput {
             samples: &self.samples,
+            genes: &self.rows[0],
+            peaks: &self.rows[1],
             batch_file: None,
             gene_positions: &self.genes,
             kernel: &self.kernel,
